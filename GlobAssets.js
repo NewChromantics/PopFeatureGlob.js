@@ -1,3 +1,5 @@
+import FindFeaturesFrag from './GlobFeatures.frag.js';
+
 //import {CreateBlitQuadGeometry} from '../PopEngine/CommonGeometry.js' 
 //=CreateBlitQuadGeometry();
 export const BlitGeometry = 
@@ -26,7 +28,10 @@ void main()
 
 `;
 
-export const FindFeaturesFrag = `
+
+export {FindFeaturesFrag};
+/*
+export const DebugFeaturesFrag = `
 precision highp float;
 varying vec2 FragUv;
 uniform sampler2D InputTexture;
@@ -45,3 +50,4 @@ void main()
 }
 
 `;
+*/
