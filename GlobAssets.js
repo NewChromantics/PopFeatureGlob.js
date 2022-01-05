@@ -29,9 +29,19 @@ void main()
 export const FindFeaturesFrag = `
 precision highp float;
 varying vec2 FragUv;
+uniform sampler2D InputTexture;
 void main()
 {
-	gl_FragColor = vec4(FragUv,0,0.5);
+	vec4 Sample = texture2D( InputTexture, FragUv );
+	gl_FragColor = vec4( Sample.xyz, 0.5 );
+	
+	//	now do feature stuff
+	float Grey = (Sample.x+Sample.y+Sample.z)/3.0;
+	if ( Grey > 0.55 )
+		gl_FragColor = vec4(1,0,1,1);
+	else
+		gl_FragColor = vec4(0,0,0,0);
+	
 }
 
 `;
