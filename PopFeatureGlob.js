@@ -39,30 +39,58 @@ export async function GetFeaturesImage(Image,RenderContext=null)
 	const Geometry = await RenderContext.CreateGeometry(GeometryData);
 	
 	//	create shader
-	const Shader = await RenderContext.CreateShader( GlobAssets.BlitVertShader, GlobAssets.FindFeaturesFrag );
+	const HighContrastShader = await RenderContext.CreateShader( GlobAssets.BlitVertShader, GlobAssets.HighContrastFrag );
+	const FindFeaturesShader = await RenderContext.CreateShader( GlobAssets.BlitVertShader, GlobAssets.FindFeaturesFrag );
+
+	//	blit chain
+	const Shaders = 
+	[
+		HighContrastShader,
+		FindFeaturesShader
+	];
 
 	const ImageWidth = Image.GetWidth(); 
 	const ImageHeight = Image.GetHeight(); 
-	const Uniforms = {};
-	Uniforms.InputTexture = Image;
-	Uniforms.InputWidthHeight = [ImageWidth,ImageHeight];
 	
 	const DrawState = {};
 	DrawState.CullMode = false;
 	DrawState.DepthRead = false;
 	DrawState.BlendMode = 'Blit';
-	
+
+	const OutputImageWidth = ImageWidth/1;
+	const OutputImageHeight = ImageHeight/1;
+
+	function MakeOutputImage()
+	{
+		const OutputImage = new Pop.Image();
+		//	todo: remove the need for dummy pixels
+		const DummyPixels = new Uint8Array(OutputImageWidth*OutputImageHeight*4);
+		OutputImage.WritePixels( OutputImageWidth, OutputImageHeight, DummyPixels, 'RGBA' );
+		return OutputImage;
+	}
+		
 	//	to readback pixels, we need to render to a texture
-	const OutputImage = new Pop.Image();
-	//	todo: remove the need for dummy pixels
-	const DummyPixels = new Uint8Array(ImageWidth*ImageHeight*4);
-	OutputImage.WritePixels( ImageWidth, ImageHeight, DummyPixels, 'RGBA' );
+	const OutputImages = Shaders.map(MakeOutputImage);
 
 	//	make draw commands
-	const ReadBack = true;
 	const RenderCommands = [];
-	RenderCommands.push(['SetRenderTarget',OutputImage,[1,0,0,1],ReadBack]);
-	RenderCommands.push(['Draw',Geometry,Shader,Uniforms]);
+	let InputImage = Image;
+	for ( let i=0;	i<Shaders.length;	i++ )
+	{
+		const Shader = Shaders[i];
+		const OutputImage = OutputImages[i];
+		const ReadBack = (i == Shaders.length-1);
+		const Uniforms = {};
+		Uniforms.InputTexture = InputImage;
+		Uniforms.InputWidthHeight = [InputImage.GetWidth(),InputImage.GetHeight()];
+		//InputImage.SetLinearFilter(true);
+
+		RenderCommands.push(['SetRenderTarget',OutputImage,[1,0,0,1],ReadBack]);
+		RenderCommands.push(['Draw',Geometry,Shader,Uniforms]);
+		InputImage = OutputImage;
+	}
+	
+	const OutputImage = OutputImages[OutputImages.length-1];
 
 	//	render
 	await RenderContext.Render(RenderCommands);

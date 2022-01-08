@@ -7,19 +7,21 @@ varying vec2 FragUv;
 uniform sampler2D InputTexture;
 uniform vec2 InputWidthHeight;
 //uniform sampler2D BackgroundImage;
-const float MaxLumaDiff = 0.14;
+const float MaxLumaDiff = 0.10;
 
-#define MAX_ANGLE_COUNT 90
-#define RadiusScale 0.5
-const float GlobRadiusOuterPx = 14.0 * RadiusScale;
-const float GlobRadiusMidPx = 8.0 * RadiusScale;
-const float GlobRadiusInnerPx = 4.0 * RadiusScale;
-const int MaxIndependentSequence = MAX_ANGLE_COUNT/10;			//	thicker lines and more angles need to allow more in a sequence
-const int LineIndependentsCount = 2;	//	one in, one out
+#define MAX_ANGLE_COUNT 180
+#define RadiusScale 1.0
+#define GLOB_RADIUS	20
+#define GLOB_MIN_MATCH	0.95
+const float GlobRadiusOuterPx = 10.0 * RadiusScale;
+const float GlobRadiusMidPx = 5.0 * RadiusScale;
+const float GlobRadiusInnerPx = 2.0;
+const int MaxIndependentSequence = 5;			//	thicker lines and more angles need to allow more in a sequence
+const int LineIndependentsCount = 2;	//	one in, one out, makes a line or a corner
 const int TeeIndependentsCount = 3;
 const int CrossIndependentsCount = 4;	
 //const int AngleCount = 15;	//	one in, one out
-const int AngleCount = MAX_ANGLE_COUNT;	//	one in, one out
+const int AngleCount = MAX_ANGLE_COUNT;
 #define ANGLE_COUNT AngleCount
 const float RotationDeg = 0.0;
 
@@ -40,10 +42,12 @@ const float RotationDeg = 0.0;
 #define GLOB_TEE			10	//	T junction
 #define GLOB_CROSS			10	//	+ junction
 #define GLOB_EDGE			11	//	pixel between 2 sides
+#define GLOB_DEBUGW			0
+#define GLOB_LINECAP		GLOB_LONER
 
 vec3 GetGlobColour(float GlobTypef)
 {
-	int GlobShowOnly = GLOB_LINE;
+	int GlobShowOnly = 0;
 	int GlobType = int(GlobTypef);
 	if ( GlobShowOnly != 0 )
 	{
@@ -67,25 +71,19 @@ vec3 GetGlobColour(float GlobTypef)
 	return vec3(1,0,1);
 }	
 
-float GetLuma(vec4 Rgba)
+float GetLuma(vec3 Rgb)
 {
-	float Average = (Rgba.x + Rgba.y + Rgba.z) / 3.0;
+	return Rgb.x;
+	float Average = (Rgb.x + Rgb.y + Rgb.z) / 3.0;
 	return Average;
-	return Rgba.x;
 }
 
-bool Glob_IsColourMatch(vec2 uvA,vec2 uvB,sampler2D ColourSource)
+bool Glob_IsColourMatch(vec2 TestColourUv,vec3 BaseColour,sampler2D ColourSource)
 {
-	vec4 ColourA = texture2D( ColourSource, uvA );
-	vec4 ColourB = texture2D( ColourSource, uvB );
-	
-	bool ValidA = (ColourA.w > 0.5);
-	bool ValidB = (ColourB.w > 0.5);
-	if ( !ValidA || !ValidB )
-		return false;
-		
-	float LumaA = GetLuma( ColourA );
-	float LumaB = GetLuma( ColourB );
+	vec3 ColourTest = texture2D( ColourSource, TestColourUv ).xyz;
+
+	float LumaA = GetLuma( BaseColour );
+	float LumaB = GetLuma( ColourTest );
 	float LumaDiff = abs( LumaA - LumaB );
 	return ( LumaDiff <= MaxLumaDiff );
 }
@@ -102,6 +100,11 @@ vec4 CalculateGlobFeature(vec2 uv,sampler2D ColourSource,out vec3 FeatureRays[MA
 	bool RingMatches[MAX_ANGLE_COUNT*2];
 	float LastMatch = 0.0;
 	
+	//	simplify for now by only matching against white
+	//vec4 BaseColour = texture2D( ColourSource, uv );
+	vec3 BaseColour = vec3(1,1,1);
+	int RingMatchCount = 0;
+	
 	//	calc offset
 	for ( int a=0;	a<ANGLE_COUNT;	a++ )
 	{
@@ -114,13 +117,24 @@ vec4 CalculateGlobFeature(vec2 uv,sampler2D ColourSource,out vec3 FeatureRays[MA
 		vec2 InnerUv = uv + Offset * GlobRadiusInner;
 		FeatureRays[a].xy = OuterUv;
 		FeatureRays[a].z = float(RAY_MISMATCH);
-		RingMatches[a] = false;
+		RingMatches[a] = true;
 		
-		if ( Glob_IsColourMatch( OuterUv, uv, ColourSource ) )
+		int MatchCount = 0;
+		const int StepSize = 1;
+		for ( int Step=1;	Step<GLOB_RADIUS;	Step+=StepSize )
 		{
-			if ( Glob_IsColourMatch( MidUv, uv, ColourSource ) )
+			vec2 StepUv = uv + (Offset * (float(Step) / LumaPlaneWidth) ); 
+			MatchCount += Glob_IsColourMatch( StepUv, BaseColour, ColourSource ) ? StepSize : 0;
+		}
+		bool Hit = float(MatchCount)/float(GLOB_RADIUS-1) > GLOB_MIN_MATCH;
+		RingMatches[a] = Hit;
+		RingMatchCount += Hit ? 1 : 0;
+		/*
+		if ( Glob_IsColourMatch( OuterUv, BaseColour, ColourSource ) )
+		{
+			if ( Glob_IsColourMatch( MidUv, BaseColour, ColourSource ) )
 			{
-				if ( Glob_IsColourMatch( InnerUv, uv, ColourSource ) )
+				if ( Glob_IsColourMatch( InnerUv, BaseColour, ColourSource ) )
 				{
 					FeatureRays[a].z = float(RAY_MATCH);
 					RingMatches[a] = true;
@@ -128,28 +142,108 @@ vec4 CalculateGlobFeature(vec2 uv,sampler2D ColourSource,out vec3 FeatureRays[MA
 				}
 			}
 		}
-		
+		*/
 		//	copy value to the opposite
 		RingMatches[a+ANGLE_COUNT] = RingMatches[a];
 	}
 	
+	if ( RingMatchCount == 0 )
+		return vec4( uv, float(GLOB_SOLID), 0.0 );
+
+/*
+	if ( RingMatchCount == 1 )
+		return vec4( uv, float(GLOB_DEBUGW), 0.5 );
+
+	if ( RingMatchCount == 2 )
+		return vec4( uv, float(GLOB_DEBUGW), 0.9 );
+
+	float Score = float(RingMatchCount-1) / float(ANGLE_COUNT); 
+	return vec4( uv, float(GLOB_DEBUGW), Score );
+*/
 	
+	//	compress into groups of lines
+	#define MAX_LINES	4
+	int LineCount = 0;
+	int SequenceCount = 0;
+	int MinSequenceLength = 1;
+	int MaxSequenceLength = 20;	//	variable on angle count, and length of glob (longer = less hits)
+	bool HasOpposite = false;	//	doesnt matter which line has an opposite
+	bool SequenceHasOpposite = false;
 	
-	//	new version, squash down sets of matches
+	for ( int i=0;	i<ANGLE_COUNT;	i++)
+	{
+		if ( RingMatches[i] )
+		{
+			SequenceCount++;
+			
+			#define OPPOSITE_RANGE	1
+			for ( int o=-OPPOSITE_RANGE;	o<=OPPOSITE_RANGE;	o++ )
+				SequenceHasOpposite = SequenceHasOpposite || RingMatches[i+o+(ANGLE_COUNT/2)];
+		}
+		else//	break sequence
+		{
+			//	was just iterating a line
+			if ( SequenceCount >= MinSequenceLength )
+			{
+				if ( SequenceCount <= MaxSequenceLength )
+				{
+					LineCount++;
+					HasOpposite = HasOpposite || SequenceHasOpposite;
+				}
+			}
+			SequenceCount = 0;
+			SequenceHasOpposite = false;
+		}
+	}
+	//	todo: loop around, and handle last angle properly
+	
+
+	//return vec4( uv, float(GLOB_DEBUGW), float(LineCount-1)/float(MAX_LINES) );
+	if ( LineCount == 0 )
+		return vec4( uv, float(GLOB_SOLID), 0.0 );
+
+	//	end of a line
+	if ( LineCount == 1 )
+	{
+		//return vec4( uv, float(GLOB_SOLID), 0.0 );
+		return vec4( uv, float(GLOB_LINECAP), 0.0 );
+	}
+
+	//	straight line
+	if ( LineCount == 2 && HasOpposite )
+	{
+		//return vec4( uv, float(GLOB_SOLID), 0.0 );
+		return vec4( uv, float(GLOB_LINE), 0.3 );
+	}
+
+	//	corner
+	if ( LineCount == 2 && !HasOpposite )
+		return vec4( uv, float(GLOB_CORNER), 0.6 );
+
+	//	T/join/cross
+	if ( LineCount >= 3 )
+		return vec4( uv, float(GLOB_TEE), 0.9 );
+
+	return vec4( uv, float(GLOB_SOLID), 0.0 );
+	return vec4( uv, float(GLOB_DEBUGW), 1.9 );
+	
+	/*
+		//	new version, squash down sets of matches
 	//	once we go over a certain amount, its just noise (or a star)
-	#define MAX_SEQ		(NOISE_SEQ+1)
-	#define NOISE_SEQ	6
+	#define MAX_SEQ		20
 	//int SeqSizes[MAX_SEQ];
 	int SeqIndex = 0;
-
 	bool SeqMatch = RingMatches[0];
 	//SeqSizes[SeqIndex] = 0;
+	int MatchWidth = 0;
 	
 	for ( int i=0;	i<ANGLE_COUNT;	i++)
 	{
 		if ( RingMatches[i] == SeqMatch )
 		{
 			//SeqSizes[SeqIndex]++;
+			if ( SeqMatch )
+				MatchWidth++;
 		}
 		else
 		{
@@ -164,29 +258,62 @@ vec4 CalculateGlobFeature(vec2 uv,sampler2D ColourSource,out vec3 FeatureRays[MA
 	//	loop around
 	if ( SeqIndex > 1 )
 	{
-		if ( SeqMatch == RingMatches[0] )
+		if ( RingMatches[0] == RingMatches[ANGLE_COUNT-1] )
 		{
 			//SeqSizes[0] += SeqSizes[SeqIndex];
 			SeqIndex--;
 		}
 	}
 	
+	bool ChunkyLines = float(MatchWidth)/float(ANGLE_COUNT) > 0.2;
+	
 	int SeqCount = SeqIndex+1;
 	
-	if ( SeqCount >= NOISE_SEQ )
-		return vec4( uv, float(GLOB_TOO_NOISY), 0.0 );
+	//	1 big colour
+	if ( SeqCount == 1 )
+		return vec4( uv, float(GLOB_SOLID), float(SeqCount-1)/float(MAX_SEQ) );
+	
+	//if ( ChunkyLines )	return vec4( uv, float(GLOB_SOLID), float(SeqCount-1)/float(MAX_SEQ) );
 		
+	//	visualise (sum of) width of lines
+	//return vec4( uv, float(GLOB_DEBUGW), float(MatchWidth)/float(ANGLE_COUNT) );
+	
+	//	2 and thick means edge
+	//if ( SeqCount == 2 )//&& MatchWidth >= ChunkyWidth )
+	//	return vec4( uv, float(GLOB_EDGE), float(SeqCount-1)/float(MAX_SEQ) );
+
+	if ( SeqCount != 2 )
+		return vec4( uv, float(GLOB_SOLID), float(SeqCount-1)/float(MAX_SEQ) );
+
+
+	//	2 and thin means end of a line
+	if ( SeqCount == 2 )
+		return vec4( uv, float(GLOB_LINECAP), float(SeqCount-1)/float(MAX_SEQ) );
+	
+	//	4 is line
+	//if ( SeqCount != 4 )
+	//	return vec4( uv, float(GLOB_SOLID), float(SeqCount-1)/float(MAX_SEQ) );
+	
+	return vec4( uv, float(GLOB_DEBUGW), float(SeqCount-1)/float(MAX_SEQ) );
+	
+	//if ( SeqCount >= NOISE_SEQ )
+	//	return vec4( uv, float(GLOB_TOO_NOISY), 0.0 );
+	
+	//	surrounded by same as us
 	if ( SeqCount == 1 && RingMatches[0] )
 		return vec4( uv, float(GLOB_SOLID), 0.0 );
+		
+	//	surrounded by not same as us
 	if ( SeqCount == 1 && !RingMatches[0] )
 		return vec4( uv, float(GLOB_LONER), 0.0 );
+	
 	//	two sides
 	if ( SeqCount == 2 )
-		return vec4( uv, float(GLOB_EDGE), 0.0 );
+		return vec4( uv, float(GLOB_EDGE), 1.0 );
 	
 	//	could be line, etc
 	return vec4( uv, float(GLOB_LINE), 0.0 );
-	
+
 	
 	//	now calc score
 	//	count how many independent matches (sets of matches) we get
@@ -196,9 +323,7 @@ vec4 CalculateGlobFeature(vec2 uv,sampler2D ColourSource,out vec3 FeatureRays[MA
 	int Blocks = 0;
 	int MatchCounter = 0;
 	int LastIndepdent = 0;
-	bool OppositeIndepdentMinus = false;
-	bool OppositeIndepdentEqual = false;
-	bool OppositeIndepdentPlus = false;
+	bool HasOpposite = false;
 	
 	for ( int i=0;	i<ANGLE_COUNT;	i++)
 	{
@@ -217,9 +342,9 @@ vec4 CalculateGlobFeature(vec2 uv,sampler2D ColourSource,out vec3 FeatureRays[MA
 				Independents++;
 				LastIndepdent = i-1;
 				
-				OppositeIndepdentMinus = RingMatches[ i-1 + (ANGLE_COUNT / 2) ];
-				OppositeIndepdentEqual = RingMatches[ i+0 + (ANGLE_COUNT / 2) ];
-				OppositeIndepdentPlus = RingMatches[ i+1 + (ANGLE_COUNT / 2) ];
+				//HasOpposite = HasOpposite || RingMatches[ i-1 + (ANGLE_COUNT / 2) ];
+				HasOpposite = HasOpposite || RingMatches[ i+0 + (ANGLE_COUNT / 2) ];
+				//HasOpposite = HasOpposite || RingMatches[ i+1 + (ANGLE_COUNT / 2) ];
 			}
 			MatchCounter = 0;
 		}
@@ -241,18 +366,21 @@ vec4 CalculateGlobFeature(vec2 uv,sampler2D ColourSource,out vec3 FeatureRays[MA
 	if ( Independents == 0 )
 		return vec4( uv, float(GLOB_LONER), FirstAngle );
 	
+	//	only one exit line, so we're edge of a line
+	if ( Independents == 1 )
+		return vec4( uv, float(GLOB_CORNER), FirstAngle );
+	
 	//	detect a line
 	if ( Independents == LineIndependentsCount )
 	{
 		//	if the opposite side of the ring is a match, we're a line
 		//	may need +- 1 tolerance here
-		/*
+		
 		 int MatchIndepdent = (LastIndepdent + ANGLE_COUNT / 2);
 		 if ( MatchIndepdent >= ANGLE_COUNT )
 		 MatchIndepdent -= ANGLE_COUNT;
-		 */
-		if ( OppositeIndepdentMinus || OppositeIndepdentEqual || OppositeIndepdentPlus )
-		//if ( OppositeIndepdentEqual )
+		
+		if ( HasOpposite )
 			return vec4( uv, float(GLOB_LINE), FirstAngle );
 		
 		return vec4( uv, float(GLOB_CORNER), FirstAngle );
@@ -261,12 +389,13 @@ vec4 CalculateGlobFeature(vec2 uv,sampler2D ColourSource,out vec3 FeatureRays[MA
 	if ( Independents == TeeIndependentsCount || Independents == CrossIndependentsCount )
 	{
 		//	need at least 1 opposite to be a T
-		if ( OppositeIndepdentMinus || OppositeIndepdentEqual || OppositeIndepdentPlus )
+		//if ( OppositeIndepdentMinus || OppositeIndepdentEqual || OppositeIndepdentPlus )
 			return vec4( uv, float(GLOB_TEE), FirstAngle );
 	}
 
 	//	too many corners
 	return vec4( uv, float(GLOB_TOO_NOISY), FirstAngle );
+	*/
 }
 
 
@@ -296,36 +425,88 @@ vec2 MakeUvBlocky(vec2 uv)
 }
 
 
-vec3 NormalToRedGreen(float Normal)
+float Range(float Min,float Max,float Value)
 {
-	if ( Normal < 0.5 )
+	return (Value-Min) / (Max-Min);
+}
+
+vec3 NormalToRedGreenBlue(float Normal)
+{
+	if ( Normal < 0.0 )
 	{
-		Normal = Normal / 0.5;
+		return vec3(0,0,0);
+	}
+	else if ( Normal < 0.25 )
+	{
+		Normal = Range( 0.0, 0.25, Normal );
 		return vec3( 1, Normal, 0 );
+	}
+	else if ( Normal <= 0.5 )
+	{
+		Normal = Range( 0.25, 0.50, Normal );
+		return vec3( 1.0-Normal, 1, 0 );
+	}
+	else if ( Normal <= 0.75 )
+	{
+		Normal = Range( 0.50, 0.75, Normal );
+		return vec3( 0, 1, Normal );
 	}
 	else if ( Normal <= 1.0 )
 	{
-		Normal = (Normal-0.5) / 0.5;
-		return vec3( 1.0-Normal, 1, 0 );
+		Normal = Range( 0.75, 1.00, Normal );
+		return vec3( 0, 1.0-Normal, 1 );
 	}
-	
-	//	>1
-	return vec3( 0,0,1 );
-}
 
+	//	>1
+	return vec3( 1,1,1 );
+}
 
 void main()
 {
 	vec2 TextureUv = ApplyZoom( FragUv );
 	vec2 SampleUv = MakeUvBlocky(TextureUv);
-	vec3 Colour = texture2D( LumaPlane, SampleUv ).xyz;
+	vec4 Colour4 = texture2D( LumaPlane, SampleUv );
+	vec3 Colour = Colour4.xyz;
 	
-	gl_FragColor = vec4( 0,0,0,0 );
+	gl_FragColor = vec4( Colour,1 );
+	if ( Colour4.w < 0.5 )
+	{
+		gl_FragColor = Colour4;
+		return;
+	}
+	//return;
 	//gl_FragColor = texture2D( BackgroundImage, SampleUv ).xxxw;
 	
 	//Colour = vec3(0,0,0);
 	vec3 FeatureHereRays[MAX_ANGLE_COUNT];
 	vec4 FeatureHere = CalculateGlobFeature( SampleUv, LumaPlane, FeatureHereRays );
+	
+	gl_FragColor.w = 1.0;
+
+	if ( int(FeatureHere.z) == GLOB_SOLID )
+	{
+		gl_FragColor.xyz = vec3(0,0,0);
+		return;
+	}
+	/*
+	if ( int(FeatureHere.z) == GLOB_LONER )
+	{
+		gl_FragColor.xyz = vec3(1,1,1);
+		return;
+	}
+	if ( int(FeatureHere.z) == GLOB_EDGE )
+	{
+		gl_FragColor.xyz = vec3(0,0,0);
+		return;
+	}
+	*/
+	
+	if ( int(FeatureHere.z) == GLOB_DEBUGW )
+	{
+		gl_FragColor.xyz = NormalToRedGreenBlue( FeatureHere.w );
+		return;
+	}
+
 	
 	Colour = GetGlobColour(FeatureHere.z);
 	

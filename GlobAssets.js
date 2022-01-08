@@ -1,4 +1,6 @@
 import FindFeaturesFrag from './GlobFeatures.frag.js';
+import HighContrastFrag from './HighContrastFilter.frag.js';
+export {FindFeaturesFrag,HighContrastFrag};
 
 //import {CreateBlitQuadGeometry} from '../PopEngine/CommonGeometry.js' 
 //=CreateBlitQuadGeometry();
@@ -29,7 +31,6 @@ void main()
 `;
 
 
-export {FindFeaturesFrag};
 /*
 export const DebugFeaturesFrag = `
 precision highp float;
