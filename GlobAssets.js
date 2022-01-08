@@ -1,6 +1,7 @@
 import FindFeaturesFrag from './GlobFeatures.frag.js';
 import HighContrastFrag from './HighContrastFilter.frag.js';
-export {FindFeaturesFrag,HighContrastFrag};
+import ExtractFeaturesFrag from './ExtractFeatures.frag.js';
+export {FindFeaturesFrag,HighContrastFrag,ExtractFeaturesFrag};
 
 //import {CreateBlitQuadGeometry} from '../PopEngine/CommonGeometry.js' 
 //=CreateBlitQuadGeometry();
@@ -52,3 +53,4 @@ void main()
 
 `;
 */
+

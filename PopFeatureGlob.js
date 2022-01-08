@@ -23,7 +23,34 @@ export class GlobFeature_t
 export async function GetFeatures(Image,RenderContext=null)
 {
 	const OutputImage = await GetFeaturesImage(Image,RenderContext);
-	throw `todo: extract features`;
+	
+	function IndexToFeature(Index)
+	{
+		const Width = OutputImage.GetWidth();
+		const Height = OutputImage.GetHeight();
+		const x = Index % Width;
+		const y = Math.floor( Index / Width );
+		const u = x / Width;
+		const v = y / Height;
+		return [u,v];
+	}
+	
+	let MatchingIndexes = [];
+	const Pixels = OutputImage.GetPixelBuffer();
+	for ( let p=0;	p<Pixels.length;	p+=4 )
+	{
+		const Index = p/4;
+		const rgba = Pixels.slice( p, p+4 );
+		const Alpha = rgba[3];
+		if ( Alpha < 200 )
+			continue;
+		MatchingIndexes.push(Index);
+		if ( MatchingIndexes.length > 2000 )
+			break;
+	}
+	
+	const Features = MatchingIndexes.map(IndexToFeature);
+	return Features;
 }
 
 export async function GetFeaturesImage(Image,RenderContext=null)
@@ -41,12 +68,14 @@ export async function GetFeaturesImage(Image,RenderContext=null)
 	//	create shader
 	const HighContrastShader = await RenderContext.CreateShader( GlobAssets.BlitVertShader, GlobAssets.HighContrastFrag );
 	const FindFeaturesShader = await RenderContext.CreateShader( GlobAssets.BlitVertShader, GlobAssets.FindFeaturesFrag );
+	const ExtractFeaturesShader = await RenderContext.CreateShader( GlobAssets.BlitVertShader, GlobAssets.ExtractFeaturesFrag );
 
 	//	blit chain
 	const Shaders = 
 	[
 		HighContrastShader,
-		FindFeaturesShader
+		FindFeaturesShader,
+		ExtractFeaturesShader,
 	];
 
 	const ImageWidth = Image.GetWidth(); 
@@ -59,16 +88,22 @@ export async function GetFeaturesImage(Image,RenderContext=null)
 
 	const OutputImageWidth = ImageWidth/1;
 	const OutputImageHeight = ImageHeight/1;
+	const LastImageWidth = Math.floor(OutputImageWidth / 1);
+	const LastImageHeight = Math.floor(OutputImageHeight / 1);
 
-	function MakeOutputImage()
+	function MakeOutputImage(Shader)
 	{
+		const Last = Shader==ExtractFeaturesShader;
+		let Width = Last ? LastImageWidth : OutputImageWidth;
+		let Height = Last ? LastImageHeight : OutputImageHeight;
+	
 		const OutputImage = new Pop.Image();
 		//	todo: remove the need for dummy pixels
-		const DummyPixels = new Uint8Array(OutputImageWidth*OutputImageHeight*4);
-		OutputImage.WritePixels( OutputImageWidth, OutputImageHeight, DummyPixels, 'RGBA' );
+		const DummyPixels = new Uint8Array(Width*Height*4);
+		OutputImage.WritePixels( Width, Height, DummyPixels, 'RGBA' );
 		return OutputImage;
 	}
-		
+	
 	//	to readback pixels, we need to render to a texture
 	const OutputImages = Shaders.map(MakeOutputImage);
 
