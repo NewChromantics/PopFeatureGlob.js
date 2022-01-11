@@ -5,7 +5,9 @@ varying vec2 FragUv;
 uniform sampler2D InputTexture;
 uniform vec2 InputWidthHeight;
 
-#define DILATE_RADIUS	2
+#define DILATE_RADIUS				2
+#define MIN_BRIGHT_NEIGHBOURS		2	//	noise filter
+#define MIN_NEIGHBOUR_BRIGHTNESS	0.1
 
 
 bool IsBright(int Offsetx,int Offsety)
@@ -39,8 +41,8 @@ void main()
 	if ( DILATE_RADIUS > 0 )
 	{
 		float NeighbourBrightf = float(BrightCount) / float(NeighbourCount);
-		SelfBright = SelfBright || (NeighbourBrightf>0.10);
-		if ( BrightCount < 3 )
+		SelfBright = SelfBright || (NeighbourBrightf>MIN_NEIGHBOUR_BRIGHTNESS);
+		if ( BrightCount < MIN_BRIGHT_NEIGHBOURS+1 )
 			SelfBright = false;
 	}
 	
