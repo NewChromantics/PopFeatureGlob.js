@@ -7,12 +7,14 @@ uniform vec2 InputWidthHeight;
 //uniform sampler2D BackgroundImage;
 
 //	width/height of sample area
-#define SAMPLE_RADIUS	12
+#define SAMPLE_RADIUS	7
 #define SAMPLE_COUNT_WIDTH	SAMPLE_RADIUS
 #define SAMPLE_COUNT_HEIGHT	SAMPLE_COUNT_WIDTH
 
 #define SAMPLE_RADIUSf		float(SAMPLE_RADIUS)
 #define SAMPLE_COUNT_WIDTHf	float(SAMPLE_COUNT_WIDTH)
+
+#define DILATE_RADIUS	2
 
 float GetLuma(vec4 Rgba)
 {
@@ -79,9 +81,11 @@ bool ContainsGreen(vec3 Rgb)
 	return Green && !White;
 }
 
-void main()
+
+bool IsBright(int Offsetx,int Offsety)
 {
 	vec2 TexelSize = vec2(1,1) / InputWidthHeight;
+	vec2 CenterUv = FragUv + vec2(Offsetx,Offsety) * TexelSize;
 	
 	//	histogram bins
 	int HistogramBinHits[HISTOGRAM_BIN_COUNT];
@@ -95,7 +99,7 @@ void main()
 	{
 		for ( float x=-SAMPLE_RADIUSf;	x<=SAMPLE_RADIUSf;	x+=SAMPLE_STEP )
 		{
-			vec2 uv = FragUv + (vec2(x,y) * TexelSize);
+			vec2 uv = CenterUv + (vec2(x,y) * TexelSize);
 			vec4 Rgba = texture2D( InputTexture, uv );
 			float Luma = GetLuma( Rgba );
 			MinLuma = min( MinLuma, Luma );
@@ -110,8 +114,7 @@ void main()
 
 	if ( !GreenNear )
 	{
-		gl_FragColor = vec4(0,0,0,1);
-		return;
+		return false;
 	}
 
 	//	get the sample and normalise it to the min/max range
@@ -121,33 +124,53 @@ void main()
 	Luma = Range( MinLuma, MaxLuma, Luma );
 	gl_FragColor = vec4( Luma, Luma, Luma, 1.0 );
 	
+	/*
 	//	show how many bins we hit in historgram
 	int BinHitCount = 0;
 	for ( int b=0;	b<HISTOGRAM_BIN_COUNT;	b++ )
 		if ( HistogramBinHits[b] > 0 )
 			BinHitCount++;
 	gl_FragColor.xyz = NormalToRedGreen( float(BinHitCount)/float(HISTOGRAM_BIN_COUNT) ); 
-	
+	*/
 	//	show low vs high range areas
 	//gl_FragColor.xyz = NormalToRedGreen( MaxLuma-MinLuma ); 
 	
 	//gl_FragColor.xyz *= vec3(Luma,Luma,Luma);
 	
-	Luma = Luma < 0.4 ? 0.0 : 1.0;
-	gl_FragColor.xyz = vec3(Luma,Luma,Luma);
+	//Luma = Luma < 0.450 ? 0.0 : 1.0;
+	//gl_FragColor.xyz = vec3(Luma,Luma,Luma);
 	
-	#define LOW_CONTRAST 0.15
+	#define LOW_CONTRAST 0.20
 	//	make low-range areas black
 	if ( MaxLuma-MinLuma < LOW_CONTRAST )
-		gl_FragColor = vec4(0,0,0,1);
-		
+		return false;
+		/*
 	#define HIGH_NOISE_BIN_COUNT	(16)
 	if ( BinHitCount >= HIGH_NOISE_BIN_COUNT )
 	{
 		//gl_FragColor.xyz = vec3(1,0,0);
 	}
+	*/
+	return Luma > 0.50;
 }
 
+
+void main()
+{
+	bool SelfBright = IsBright(0,0);
+/*	
+	//	dilate
+	for ( int y=-DILATE_RADIUS;	y<=DILATE_RADIUS;	y++ )
+	{
+		for ( int x=-DILATE_RADIUS;	x<=DILATE_RADIUS;	x++ )
+		{
+			bool NeighbourBright = IsBright(x,y);
+			SelfBright = SelfBright || NeighbourBright;
+		}
+	}
+	*/
+	gl_FragColor = SelfBright ? vec4(1,1,1,1) : vec4(0,0,0,1);
+}
 
 `;
 export default Frag;

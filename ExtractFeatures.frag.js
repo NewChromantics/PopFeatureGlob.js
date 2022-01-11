@@ -34,9 +34,12 @@ void main()
 	float NeighbourScore = GetBestNeighbourScore();
 	float ThisScore = texture2D( InputTexture, FragUv ).w;
 	
-	gl_FragColor = vec4(0,0,0,0);
+	gl_FragColor = vec4(1,0,1,0);
 	if ( ThisScore > NeighbourScore )
-		gl_FragColor = vec4(ThisScore,ThisScore,ThisScore,ThisScore);
+	{
+		gl_FragColor.w = ThisScore;// > 0.01 ? 1.0 : 0.0;
+		
+	}
 }
 
 `;

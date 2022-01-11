@@ -22,7 +22,7 @@ export class GlobFeature_t
 //	returns array of GlobFeature_t
 export async function GetFeatures(Image,RenderContext=null)
 {
-	const OutputImage = await GetFeaturesImage(Image,RenderContext);
+	const OutputImage = await GetFeaturesImage(Image,RenderContext,true);
 	
 	function IndexToFeature(Index)
 	{
@@ -42,7 +42,7 @@ export async function GetFeatures(Image,RenderContext=null)
 		const Index = p/4;
 		const rgba = Pixels.slice( p, p+4 );
 		const Alpha = rgba[3];
-		if ( Alpha < 200 )
+		if ( Alpha < 10 )
 			continue;
 		MatchingIndexes.push(Index);
 		if ( MatchingIndexes.length > 2000 )
@@ -53,7 +53,7 @@ export async function GetFeatures(Image,RenderContext=null)
 	return Features;
 }
 
-export async function GetFeaturesImage(Image,RenderContext=null)
+export async function GetFeaturesImage(Image,RenderContext=null,ExtractFeaturesPass=false)
 {
 	if ( !RenderContext )
 	{
@@ -67,6 +67,7 @@ export async function GetFeaturesImage(Image,RenderContext=null)
 	
 	//	create shader
 	const HighContrastShader = await RenderContext.CreateShader( GlobAssets.BlitVertShader, GlobAssets.HighContrastFrag );
+	const DilateShader = await RenderContext.CreateShader( GlobAssets.BlitVertShader, GlobAssets.DilateFrag );
 	const FindFeaturesShader = await RenderContext.CreateShader( GlobAssets.BlitVertShader, GlobAssets.FindFeaturesFrag );
 	const ExtractFeaturesShader = await RenderContext.CreateShader( GlobAssets.BlitVertShader, GlobAssets.ExtractFeaturesFrag );
 
@@ -74,9 +75,10 @@ export async function GetFeaturesImage(Image,RenderContext=null)
 	const Shaders = 
 	[
 		HighContrastShader,
+		DilateShader,
 		FindFeaturesShader,
-		ExtractFeaturesShader,
-	];
+		//ExtractFeaturesPass ? ExtractFeaturesShader : null,
+	].filter(s=>s!=null);
 
 	const ImageWidth = Image.GetWidth(); 
 	const ImageHeight = Image.GetHeight(); 

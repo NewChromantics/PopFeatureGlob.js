@@ -9,16 +9,9 @@ uniform vec2 InputWidthHeight;
 //uniform sampler2D BackgroundImage;
 const float MaxLumaDiff = 0.10;
 
-#define MAX_ANGLE_COUNT 180
-#define GLOB_RADIUS	20
-const int MaxIndependentSequence = 5;			//	thicker lines and more angles need to allow more in a sequence
-const int LineIndependentsCount = 2;	//	one in, one out, makes a line or a corner
-const int TeeIndependentsCount = 3;
-const int CrossIndependentsCount = 4;	
-//const int AngleCount = 15;	//	one in, one out
-const int AngleCount = MAX_ANGLE_COUNT;
-#define ANGLE_COUNT AngleCount
-const float RotationDeg = 0.0;
+#define ANGLE_COUNT 180
+#define GLOB_RADIUS	10
+const float RotationDeg = -101.0;
 
 
 #define GlobRadiusOuter		( GlobRadiusOuterPx / LumaPlaneWidth )
@@ -102,13 +95,19 @@ int absint(int a)
 vec4 CalculateGlobFeature(vec2 uv,sampler2D ColourSource)
 {
 	//	double size so we can check the opposite without modulus index
-	float AngleScores[MAX_ANGLE_COUNT*2];
+	float AngleScores[ANGLE_COUNT*2];
 	
 	//	simplify for now by only matching against white
 	//vec4 BaseColour = texture2D( ColourSource, uv );
 	vec3 BaseColour = vec3(1,1,1);
+	//	ignore if source is not white
+	if ( !Glob_IsColourMatch( uv, BaseColour, ColourSource ) )
+		return vec4( uv, float(GLOB_SOLID), 0.0 );
+	
 	float TotalScore = 0.0;	//	for weighting
 	float HighestScore = 0.0;
+	float LowestScore = 1.0;	//	low score of 0 means we're on an edge
+	
 	
 	for ( int a=0;	a<ANGLE_COUNT;	a++ )
 	{
@@ -125,26 +124,159 @@ vec4 CalculateGlobFeature(vec2 uv,sampler2D ColourSource)
 		//	walk in both directions
 		for ( int Step=BothDirections?-GLOB_RADIUS:1;	Step<=GLOB_RADIUS;	Step++ )
 		{
-			vec2 StepUv = uv + (Offset * (float(Step) / LumaPlaneWidth) ); 
-			MatchCount += Glob_IsColourMatch( StepUv, BaseColour, ColourSource ) ? 1 : 0;
+			vec2 StepUv = uv + (Offset * (float(Step) / LumaPlaneWidth) );
+			bool Match = Glob_IsColourMatch( StepUv, BaseColour, ColourSource );
+			MatchCount += Match ? 1 : 0;
 			TestCount += 1;
+			//	when we have a lot of dilation, we can assume there wont be breaks
+			if ( !Match )	break;
+			
 		}
 		float Score = float(MatchCount)/float(TestCount);
-		//Score *= Score;
+		Score *= Score;
 		AngleScores[a] = Score;
 		TotalScore += Score;
 		HighestScore = max( HighestScore, Score );
-	
+		LowestScore = min( LowestScore, Score );
 		
 		//	copy value to the opposite
 		AngleScores[a+ANGLE_COUNT] = AngleScores[a];
 	}
 	
+	//	we're on an edge, hide (as is noisy)
+	//	todo: turn into a score for maxima rejection later
+	//return vec4( uv, float(GLOB_DEBUGW), LowestScore/float(0.3) );
+	if ( LowestScore <= float(0)/float(GLOB_RADIUS) )
+		return vec4( uv, float(GLOB_SOLID), 0.0 );
+
+	//	when dilated, this is pretty strong and relative to glob radius
+	//	so we shouldnt really care
+	#define MIN_SCORE 0.50	
+	if ( HighestScore <= MIN_SCORE )
+		return vec4( uv, float(GLOB_SOLID), 0.0 );
 	float Average = TotalScore / float(ANGLE_COUNT);
-	float MinScore = 0.8;
-	float MaxAverage = 0.5;
-	if ( HighestScore < MinScore )	return vec4( uv, float(GLOB_SOLID), 0.0 );
-	if ( Average > MaxAverage )	return vec4( uv, float(GLOB_SOLID), 0.0 );
+	
+	
+	
+	if ( false )
+	{
+		//	gr: this visualises "angle" well
+		//	get first angle with highest score
+		for ( int a=0;	a<ANGLE_COUNT;	a++ )
+		{
+			if ( AngleScores[a] == HighestScore )
+			{
+				float anorm = float(a)/float(ANGLE_COUNT);
+				return vec4( uv, float(GLOB_DEBUGW), anorm );
+			}
+		}
+		//return vec4( uv, float(GLOB_DEBUGW), 0.99 );
+		return vec4( uv, float(GLOB_SOLID), 0.0 );
+	}
+	
+	
+	//	count dips
+	bool Dropping = true;
+	int Peaks = 0;
+	int LastPeakAngle = -100;
+	for ( int a=0;	a<ANGLE_COUNT;	a++ )
+	{
+		float PrevScore = AngleScores[a+0];
+		float NextScore = AngleScores[a+1];
+		//	going down
+		if ( NextScore < PrevScore )	
+		{
+			//	"not a peak" as it was so small
+			if ( PrevScore > Average*1.1 )
+			//if ( PrevScore > HighestScore*0.2 )
+			{
+				//	was high
+				if ( !Dropping )			
+				{
+					int SincePeak = a - LastPeakAngle;
+					if ( SincePeak > ANGLE_COUNT/10 )
+					{
+						Peaks++;				//	so we've passed a peak
+					}
+					LastPeakAngle = a;
+					
+				}
+			}
+		}
+		
+		Dropping = ( NextScore < PrevScore );
+	}
+	
+	//	wont happen
+	//if ( Peaks == 0 )	return vec4( uv, float(GLOB_DEBUGW), 0.0 );
+	
+	//	line caps
+	if ( Peaks == 1 )	return vec4( uv, float(GLOB_DEBUGW), 0.0 );
+	if ( Peaks == 2 )	return vec4( uv, float(GLOB_DEBUGW), 0.5 );
+	if ( Peaks == 3 )	return vec4( uv, float(GLOB_DEBUGW), 0.99 );
+	//if ( Peaks == 0 )	return vec4( uv, float(GLOB_DEBUGW), 0.0 );
+	//if ( Peaks == 0 )	return vec4( uv, float(GLOB_DEBUGW), 0.0 );
+	{
+		//float PeakNorm = float(Peaks-1)/float(3);
+		//return vec4( uv, float(GLOB_DEBUGW), PeakNorm );
+		return vec4( uv, float(GLOB_DEBUGW), -1.99 );
+	}
+	
+	
+	
+	
+	
+	float MinScore = 0.70;
+	float MaxAverage = 0.30;
+	//if ( HighestScore < MinScore )	return vec4( uv, float(GLOB_SOLID), 0.0 );
+	//if ( Average > MaxAverage )	return vec4( uv, float(GLOB_SOLID), 0.0 );
+
+	return vec4( uv, float(GLOB_DEBUGW), HighestScore );
+
+	//	clean out bad data
+	/*
+	for ( int a=0;	a<ANGLE_COUNT;	a++ )
+	{
+		if ( AngleScores[a] <= Average )
+			AngleScores[a] = 0.0;
+	}
+		*/
+/*
+	//	do maxima filter
+	for ( int a=1;	a<ANGLE_COUNT;	a++ )
+	{
+		float PrevScore = AngleScores[a-1];
+		float NextScore = AngleScores[a+0];
+		if ( PrevScore <= NextScore )
+		{
+			AngleScores[a-1] = 0.0;
+		}
+	}
+	for ( int a=ANGLE_COUNT-1;	a>0;	a-- )
+	{
+		float PrevScore = AngleScores[a-1];
+		float NextScore = AngleScores[a+0];
+		if ( PrevScore >= NextScore )
+		{
+			AngleScores[a+0] = 0.0;
+		}
+	}
+	*/
+	/*
+	int AngleCount = 0;
+	for ( int a=1;	a<ANGLE_COUNT;	a++ )
+	{
+		bool PrevValid = AngleScores[a-1] > Average*1.0;
+		bool NextValid = AngleScores[a-0] > Average*1.0;
+		if ( PrevValid && !NextValid )
+			AngleCount++;
+	}
+	
+	if ( AngleCount==0 )return vec4( uv, float(GLOB_SOLID), 0.0 );
+	return vec4( uv, float(GLOB_DEBUGW), float(AngleCount-1)/float(10.0) );
+*/
+
+/*
 
 	int AngleFirst = 0;
 	int AngleSecond = 0;
@@ -170,15 +302,15 @@ vec4 CalculateGlobFeature(vec2 uv,sampler2D ColourSource)
 	int AngleDiff = absint( AngleSecond - AngleFirst - (ANGLE_COUNT/2) );
 	bool Opposite = (PeakCount==2) && (AngleDiff<10);
 	
-	if ( Opposite )return vec4( uv, float(GLOB_SOLID), 0.0 );
-	if ( PeakCount > 3 )	return vec4( uv, float(GLOB_SOLID), 0.0 );
+	//if ( Opposite )return vec4( uv, float(GLOB_SOLID), 0.0 );
+	//if ( PeakCount > 3 )	return vec4( uv, float(GLOB_SOLID), 0.0 );
 
 	//if ( PeakCount != 3)
 	//	return vec4( uv, float(GLOB_SOLID), 0.0 );
 	//return vec4( uv, float(GLOB_DEBUGW), float(PeakCount-1)/float(5.0) );
+*/
 
-	
-	float Entropy = Range( Average, 1.0, HighestScore-Average );
+	float Entropy = Range( 0.0, 1.0, HighestScore-Average );
 	return vec4( uv, float(GLOB_DEBUGW), Entropy );
 	
 	//	highest score should be a chunk above the average to indicate concentrated angles
@@ -267,16 +399,23 @@ void main()
 	
 	//Colour = vec3(0,0,0);
 	vec4 FeatureHere = CalculateGlobFeature( SampleUv, LumaPlane );
-	
-	//	w=score
-	gl_FragColor.w = FeatureHere.w;
-	//gl_FragColor.w = 1.0;
 
 	if ( int(FeatureHere.z) == GLOB_SOLID )
 	{
-		gl_FragColor.xyz = vec3(0,0,0);
+		gl_FragColor = vec4(0,0,0,0);
 		return;
 	}
+	/*
+	//	w=score
+	//gl_FragColor.w = FeatureHere.w;
+	
+	if ( FeatureHere.w == 0.0 )
+	{
+		gl_FragColor = Colour4;
+		return;
+	}*/
+	gl_FragColor.w = 1.0;
+
 	/*
 	if ( int(FeatureHere.z) == GLOB_LONER )
 	{
