@@ -53,32 +53,30 @@ export async function GetFeatures(Image,RenderContext=null)
 	return Features;
 }
 
-export async function GetFeaturesImage(Image,RenderContext=null,ExtractFeaturesPass=false)
+
+
+async function FilterImage(Image,RenderContext=null,FragShaderSources)
 {
 	if ( !RenderContext )
 	{
 		Pop.Warning(`No rendercontext, creating & discarding rendercontext just for this run`);
 		RenderContext = new Pop.Opengl.Context(null);
 	}
+	FragShaderSources = FragShaderSources || [];
+	if ( !FragShaderSources.length )
+		throw `No frag shaders provided`;
 	
 	//	create blit geo
 	const GeometryData = GlobAssets.BlitGeometry;
 	const Geometry = await RenderContext.CreateGeometry(GeometryData);
 	
-	//	create shader
-	const HighContrastShader = await RenderContext.CreateShader( GlobAssets.BlitVertShader, GlobAssets.HighContrastFrag );
-	const DilateShader = await RenderContext.CreateShader( GlobAssets.BlitVertShader, GlobAssets.DilateFrag );
-	const FindFeaturesShader = await RenderContext.CreateShader( GlobAssets.BlitVertShader, GlobAssets.FindFeaturesFrag );
-	const ExtractFeaturesShader = await RenderContext.CreateShader( GlobAssets.BlitVertShader, GlobAssets.ExtractFeaturesFrag );
-
-	//	blit chain
-	const Shaders = 
-	[
-		HighContrastShader,
-		DilateShader,
-		FindFeaturesShader,
-		//ExtractFeaturesPass ? ExtractFeaturesShader : null,
-	].filter(s=>s!=null);
+	//	create shaders
+	const Shaders = [];
+	for ( let FragSource of FragShaderSources )
+	{
+		const Shader = await RenderContext.CreateShader( GlobAssets.BlitVertShader, FragSource );
+		Shaders.push(Shader);
+	}
 
 	const ImageWidth = Image.GetWidth(); 
 	const ImageHeight = Image.GetHeight(); 
@@ -93,9 +91,9 @@ export async function GetFeaturesImage(Image,RenderContext=null,ExtractFeaturesP
 	const LastImageWidth = Math.floor(OutputImageWidth / 1);
 	const LastImageHeight = Math.floor(OutputImageHeight / 1);
 
-	function MakeOutputImage(Shader)
+	function MakeOutputImage(Shader,ShaderIndex)
 	{
-		const Last = Shader==ExtractFeaturesShader;
+		const Last = ShaderIndex == (Shaders.length-1);
 		let Width = Last ? LastImageWidth : OutputImageWidth;
 		let Height = Last ? LastImageHeight : OutputImageHeight;
 	
@@ -136,3 +134,17 @@ export async function GetFeaturesImage(Image,RenderContext=null,ExtractFeaturesP
 	return OutputImage;
 }
 
+
+
+export async function GetFeaturesImage(Image,RenderContext=null,ExtractFeaturesPass=false)
+{
+	const FragShaders = 
+	[
+	GlobAssets.HighContrastFrag,
+	GlobAssets.DilateFrag,
+	GlobAssets.FindFeaturesFrag,
+	ExtractFeaturesPass ? GlobAssets.ExtractFeaturesFrag : null,
+	].filter( s => s!=null );
+
+	return FilterImage( Image, RenderContext, FragShaders );
+}
