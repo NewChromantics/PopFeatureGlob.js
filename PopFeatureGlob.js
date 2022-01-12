@@ -197,19 +197,16 @@ export async function GetLineSegments(Image,RenderContext=null)
 	//	https://github.com/gmarty/hough-transform-js/blob/master/hough-transform.js
 	
 	const AngleCount = 180;
-	//	gr: this should change to cell max (though with javascript random access we dont need it anyway
-	//	we do need it though, i think because of the shift
-	const NeighbourSearch_AngleRange = 5;
-	const NeighbourSearch_AngleRadius = Math.max( 1, Math.floor(NeighbourSearch_AngleRange * (AngleCount/360) ) );
+	const NeighbourSearch_AngleDegreeRange = 10;
+	const NeighbourSearch_AngleRadius = Math.max( 1, Math.floor(NeighbourSearch_AngleDegreeRange * (AngleCount/360) ) );
 	const NeighbourSearch_RhoRadius = 3;
 
 	const MergeMaxAngleDistance = 5;
-	const MergeMaxPixelDistance = 5;
+	const MergeMaxPixelDistance = 3;
 	const OnlyBestInCell = false;
 	const MinPixelHits = 5;	//	this is now scored so scales
 	const MinPercentile = 0.2;	//	might cut off too many un-related weak lines
 	const SnapPreDuplicate = false;
-	const rhoMax = Math.sqrt( ImageWidth * ImageWidth + ImageHeight * ImageHeight);
 	const CellSize = [20,15];
 	const CellCount = CellSize[0] * CellSize[1];
 	const CellAngleRhoHits = new Array(CellCount);
@@ -359,9 +356,6 @@ export async function GetLineSegments(Image,RenderContext=null)
 			const BottomRight = [Rect.Right,Rect.Bottom];
 			const BottomLeft = [Rect.Left,Rect.Bottom];
 
-			// now to backproject into drawing space
-			//Rho<<=1; // accumulator is bitshifted
-			Rho-=rhoMax; /// accumulator has rhoMax added
 			//console.log(Theta,Rho,HitCount);
 			var a = cosTable[AngleIndex];
 			var b = sinTable[AngleIndex];
@@ -424,7 +418,7 @@ export async function GetLineSegments(Image,RenderContext=null)
 					break;
 				}
 					
-				for (let rho=0;	rho<RhoHits.length;	rho++) 
+				for ( let rho in RhoHits ) 
 				{
 					let HitCount = RhoHits[rho]||0;
 					if ( !HitCount )
@@ -492,9 +486,7 @@ export async function GetLineSegments(Image,RenderContext=null)
 		for ( let AngleIndex=0;	AngleIndex<AngleCount;	AngleIndex++ ) 
 		{
 			let Theta = (AngleIndex/AngleCount) * (Math.PI);
-			let rho = rhoMax + x * Math.cos(Theta) + y * Math.sin(Theta);
-			//let rho = rhoMax + x * cosTable[AngleIndex] + y * sinTable[AngleIndex];
-			//rho >>= 1;
+			let rho = x * Math.cos(Theta) + y * Math.sin(Theta);
 			rho = Math.floor(rho);
 			
 			CellAngleRhoHits[CellIndex][AngleIndex] = CellAngleRhoHits[CellIndex][AngleIndex] || [];
@@ -522,6 +514,7 @@ export async function GetLineSegments(Image,RenderContext=null)
 			OnPixel(x,y, Score);
 		}
 	}
+	
 
 	//	extract lines
 	findMaxInHough();
