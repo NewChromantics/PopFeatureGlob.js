@@ -180,21 +180,51 @@ export async function GetLineSegments(Image,RenderContext=null)
 	//	https://github.com/gmarty/hough-transform-js/blob/master/hough-transform.js
 	
 	//	not windowed
-	var numAngleCells = 180;
+	var AngleCount = 180;
 	let drawingWidth = 100;
 	let drawingHeight = 100;
 	var rhoMax = Math.sqrt(drawingWidth * drawingWidth + drawingHeight * drawingHeight);
-	var accum = new Array(numAngleCells);
-	var cosTable = Array(numAngleCells);
-	var sinTable = Array(numAngleCells);
-	for (var theta = 0, thetaIndex = 0; thetaIndex < numAngleCells; theta += Math.PI / numAngleCells, thetaIndex++) 
+	const CellSize = [30,30];
+	const CellCount = CellSize[0] * CellSize[1];
+	var accum = new Array(AngleCount);
+	
+	function GetCellXy(x,y)
 	{
-		cosTable[thetaIndex] = Math.cos(theta);
-		sinTable[thetaIndex] = Math.sin(theta);
+		const cx = Math.floor( x / ImageWidth * CellSize[0]);
+		const cy = Math.floor( y / ImageHeight * CellSize[1]);
+		return [cx,cy];
 	}
-	// Set the size of the Hough space.
-	//$houghSp.width = numAngleCells;
-	//$houghSp.height = rhoMax;
+	function GetCellIndex(x,y)
+	{
+		const cxy = GetCellXy(x,y);
+		const Index = cxy[0] + (cxy[1] * CellSize[0]);
+		return Index;
+	}
+	function GetCellRect(Index)
+	{
+		const cx = Index % CellSize[0];
+		const cy = Math.floor( Index / CellSize[0] );
+		let Left = cx / CellSize[0];
+		let Right = (cx+1) / CellSize[0];
+		let Top = cy / CellSize[1];
+		let Bottom = (cy+1) / CellSize[1];
+		const Rect = {};
+		Rect.Left = Math.floor(Left * ImageWidth);
+		Rect.Right = Math.floor(Right * ImageWidth);
+		Rect.Top = Math.floor(Top * ImageHeight);
+		Rect.Bottom = Math.floor(Bottom * ImageHeight);
+		return Rect;
+	}
+	
+	var cosTable = Array(AngleCount);
+	var sinTable = Array(AngleCount);
+	for ( let AngleIndex=0;	AngleIndex<AngleCount;	AngleIndex++ )
+	{
+		let Theta = (AngleIndex/AngleCount) * (Math.PI);
+		cosTable[AngleIndex] = Math.cos(Theta);
+		sinTable[AngleIndex] = Math.sin(Theta);
+	}
+
 	
 	const LineSegments = [];
 	function OnLine(Start,End)
@@ -210,30 +240,18 @@ export async function GetLineSegments(Image,RenderContext=null)
 	{
 		//	this needs to work out the max for that row's length in a window
 		//	otherwise we wont hit corners
-		let MinAccumulation = 200;
+		let MinAccumulation = 30;
+		let MaxAccumulation = 0;
 		
-		const Border = 0;
-		const TopLeft = [Border,Border];
-		const TopRight = [ImageWidth-Border,Border];
-		const BottomRight = [ImageWidth-Border,ImageHeight-Border];
-		const BottomLeft = [Border,ImageHeight-Border];
-			
-		let ImageEdges = 
-		[
-			[	TopLeft,		TopRight	],
-			[	TopRight,		BottomRight	],
-			[	BottomRight,	BottomLeft	],
-			[	BottomLeft,		TopLeft	],
-		];
 		
-		function OnHoughHit(Rho,Theta,HitCount)
+		function OnHoughHit(Rho,AngleIndex,HitCount,CellIndex)
 		{
 			// now to backproject into drawing space
 			Rho<<=1; // accumulator is bitshifted
 			Rho-=rhoMax; /// accumulator has rhoMax added
-			console.log(Theta,Rho,HitCount);
-			var a=cosTable[Theta];
-			var b=sinTable[Theta];
+			//console.log(Theta,Rho,HitCount);
+			var a = cosTable[AngleIndex];
+			var b = sinTable[AngleIndex];
 			
 			let LineWidth = 1000;
 			
@@ -248,6 +266,21 @@ export async function GetLineSegments(Image,RenderContext=null)
 			let Start = [x1,y1];
 			let End = [x2,y2];
 			
+				
+			const Rect = GetCellRect(CellIndex);
+			const TopLeft = [Rect.Left,Rect.Top];
+			const TopRight = [Rect.Right,Rect.Top];
+			const BottomRight = [Rect.Right,Rect.Bottom];
+			const BottomLeft = [Rect.Left,Rect.Bottom];
+				
+			let ImageEdges = 
+			[
+				[	TopLeft,		TopRight	],
+				[	TopRight,		BottomRight	],
+				[	BottomRight,	BottomLeft	],
+				[	BottomLeft,		TopLeft	],
+			];
+			
 			
 			let EdgeIntersections = ImageEdges.map( Edge => GetLineLineIntersection( Edge[0], Edge[1], Start, End ) );
 			EdgeIntersections = EdgeIntersections.filter( Intersection => Intersection!=false );
@@ -259,17 +292,30 @@ export async function GetLineSegments(Image,RenderContext=null)
 			//OnLine( Start, End );
 		}
 		
-		for (let theta=0;theta<numAngleCells;theta++) 
+		for (let AngleIndex=0;AngleIndex<AngleCount;AngleIndex++) 
 		{
-			for (let rho=0;	rho<accum[theta].length;	rho++) 
+			for (let rho=0;	rho<accum[AngleIndex].length;	rho++) 
 			{
-				let HitCount = accum[theta][rho];
-				if (HitCount>MinAccumulation) 
+				if ( !accum[AngleIndex][rho] )
+					continue;
+				if ( LineSegments.length > 3000 )
 				{
-					OnHoughHit( rho, theta, HitCount );
+					console.warn(`Too many hits`);
+					break;
+				}
+				for ( let CellIndex=0;	CellIndex<CellCount;	CellIndex++ )
+				{
+					let HitCount = accum[AngleIndex][rho][CellIndex];
+					MaxAccumulation = Math.max( MaxAccumulation, HitCount||0 );
+					if (HitCount>MinAccumulation) 
+					{
+						OnHoughHit( rho, AngleIndex, HitCount, CellIndex );
+					}
 				}
 			}
 		}
+		
+		console.log(`Max accumulation is ${MaxAccumulation}`);
 		
 
 	}
@@ -279,26 +325,22 @@ export async function GetLineSegments(Image,RenderContext=null)
 	// Classical implementation.
 	function houghAccClassical(x, y) 
 	{
+		let Pos = [x,y];
 		var rho;
-		var theta = 0;
-		var thetaIndex = 0;
 		x -= drawingWidth / 2;
 		y -= drawingHeight / 2;
-		for (; thetaIndex < numAngleCells; theta += Math.PI / numAngleCells, thetaIndex++) 
+		for ( let thetaIndex=0;	thetaIndex<AngleCount;	thetaIndex++ ) 
 		{
-			//rho = rhoMax + x * Math.cos(theta) + y * Math.sin(theta);
+			//let Theta = (thetaIndex/AngleCount) * (Math.PI);
+			//rho = rhoMax + x * Math.cos(Theta) + y * Math.sin(Theta);
 			rho = rhoMax + x * cosTable[thetaIndex] + y * sinTable[thetaIndex];
 			rho >>= 1;
-			if (accum[thetaIndex] == undefined) accum[thetaIndex] = [];
-			if (accum[thetaIndex][rho] == undefined) 
-			{
-				accum[thetaIndex][rho] = 1;
-			}
-			else
-			{
-				accum[thetaIndex][rho]++;
-			}
-			//drawInHough(rho,thetaIndex);
+			
+			const CellIndex = GetCellIndex( Pos[0], Pos[1] );
+			accum[thetaIndex] = accum[thetaIndex] || [];
+			accum[thetaIndex][rho] = accum[thetaIndex][rho] || [];
+			accum[thetaIndex][rho][CellIndex] = accum[thetaIndex][rho][CellIndex] || 0;
+			accum[thetaIndex][rho][CellIndex]++;
 		}
 	}
 	
