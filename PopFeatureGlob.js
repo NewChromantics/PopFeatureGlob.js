@@ -168,6 +168,23 @@ export async function GetLineSegments(Image,RenderContext=null)
 	const ImageWidth = Image.GetWidth();
 	const ImageHeight = Image.GetHeight();
 
+	const Pixels = Image.GetPixelBuffer();
+	function GetPixelScoreFromIndex(Index)
+	{
+		const p = Index * 4;
+		const rgba = Pixels.slice( p, p+4 );
+		const Alpha = rgba[0];
+		return Alpha/255;
+	}
+
+	function GetPixelScore(x,y)
+	{
+		if ( x < 0 || y < 0 || x>=ImageWidth || y>=ImageHeight)
+			return 0;
+		const Index = x + (y*ImageWidth);
+		return GetPixelScoreFromIndex(Index); 
+	}
+
 /*
 	const LineSegments = 
 	[
@@ -179,12 +196,21 @@ export async function GetLineSegments(Image,RenderContext=null)
 	//	first implementation via 
 	//	https://github.com/gmarty/hough-transform-js/blob/master/hough-transform.js
 	
-	//	not windowed
-	var AngleCount = 180;
-	let drawingWidth = 100;
-	let drawingHeight = 100;
-	var rhoMax = Math.sqrt(drawingWidth * drawingWidth + drawingHeight * drawingHeight);
-	const CellSize = [25,25];
+	const AngleCount = 180;
+	//	gr: this should change to cell max (though with javascript random access we dont need it anyway
+	//	we do need it though, i think because of the shift
+	const NeighbourSearch_AngleRange = 5;
+	const NeighbourSearch_AngleRadius = Math.max( 1, Math.floor(NeighbourSearch_AngleRange * (AngleCount/360) ) );
+	const NeighbourSearch_RhoRadius = 3;
+
+	const MergeMaxAngleDistance = 5;
+	const MergeMaxPixelDistance = 5;
+	const OnlyBestInCell = false;
+	const MinPixelHits = 5;	//	this is now scored so scales
+	const MinPercentile = 0.2;	//	might cut off too many un-related weak lines
+	const SnapPreDuplicate = false;
+	const rhoMax = Math.sqrt( ImageWidth * ImageWidth + ImageHeight * ImageHeight);
+	const CellSize = [20,15];
 	const CellCount = CellSize[0] * CellSize[1];
 	const CellAngleRhoHits = new Array(CellCount);
 	const CellHits = new Array(CellCount).fill(0);
@@ -234,15 +260,88 @@ export async function GetLineSegments(Image,RenderContext=null)
 		sinTable[AngleIndex] = Math.sin(Theta);
 	}
 
-	
-	const LineSegments = [];
-	function OnLine(Start,End)
+	function SnapToHigherScore(origx,origy)
 	{
-		Start[0] /= ImageWidth;
-		End[0] /= ImageWidth;
-		Start[1] /= ImageHeight;
-		End[1] /= ImageHeight;
-		LineSegments.push( [Start,End] );
+		//	gr: hmm should this go along the line, or radius fine?
+		let SearchRad = 2;
+		let BestPos = [origx,origy];
+		let Best = GetPixelScore(...BestPos);
+		
+		//	avoid snapping up-left by starting from center and move outward
+		for ( let rad=1;	rad<=SearchRad;	rad++ )
+		{
+			if ( Best >= 1.0 )
+				break;
+			function Try(x,y)
+			{
+				const Score = GetPixelScore(origx+x,origy+y);
+				if ( Score <= Best )
+					return;
+				Best = Score;
+				BestPos = [origx+x,origy+y];
+			}
+			
+			//	top row
+			for ( let x=-rad;	x<=rad;	x++ )
+				Try( x, -rad );
+
+			//	bottom row
+			for ( let x=-rad;	x<=rad;	x++ )
+				Try( x, rad );
+				
+			//	left
+			for ( let y=-rad+1;	y<=rad-1;	y++ )
+				Try( -rad, y );
+				
+			//	right
+			for ( let y=-rad+1;	y<=rad-1;	y++ )
+				Try( rad, y );
+		}
+		return BestPos;
+	}
+	
+	let DuplicatesSkipped = 0;
+	let LineSegments = [];
+	function OnLine(Start,End,AngleIndex)
+	{
+		//	one final snap to sdf
+		if ( SnapPreDuplicate )
+		{
+			Start = SnapToHigherScore( ...Start );
+			End = SnapToHigherScore( ...End );
+		}
+		
+		function Distance2(aa,bb)
+		{
+			return Math.hypot( aa[0]-bb[0], aa[1]-bb[1] );
+		}
+		
+		//	merge duplicates
+		function IsDuplicate(Line)
+		{
+			let StartDistance = Distance2( Start, Line[0] );
+			let EndDistance = Distance2( End, Line[1] );
+			let AngleDistance = Math.abs( AngleIndex - Line[2] );
+			if ( StartDistance <= MergeMaxPixelDistance )
+				if ( EndDistance <= MergeMaxPixelDistance )
+					if ( AngleDistance <= MergeMaxAngleDistance )
+						return true;
+			return false;
+		}
+		
+		
+		if ( LineSegments.some(IsDuplicate) )
+		{
+			DuplicatesSkipped++;
+			//console.log(`skipping duplicate x${DuplicatesSkipped} skipped`);
+			return;
+		}
+		
+		//Start = SnapToHigherScore( ...Start );
+		//End = SnapToHigherScore( ...End );
+	
+	
+		LineSegments.push( [Start,End,AngleIndex] );
 	}
 	
 	function findMaxInHough() 
@@ -261,7 +360,7 @@ export async function GetLineSegments(Image,RenderContext=null)
 			const BottomLeft = [Rect.Left,Rect.Bottom];
 
 			// now to backproject into drawing space
-			Rho<<=1; // accumulator is bitshifted
+			//Rho<<=1; // accumulator is bitshifted
 			Rho-=rhoMax; /// accumulator has rhoMax added
 			//console.log(Theta,Rho,HitCount);
 			var a = cosTable[AngleIndex];
@@ -296,7 +395,7 @@ export async function GetLineSegments(Image,RenderContext=null)
 			
 			if ( EdgeIntersections.length != 2 )
 				return;
-			OnLine( EdgeIntersections[0], EdgeIntersections[1] );
+			OnLine( EdgeIntersections[0], EdgeIntersections[1], AngleIndex );
 
 			//OnLine( Start, End );
 		}
@@ -308,8 +407,6 @@ export async function GetLineSegments(Image,RenderContext=null)
 			if ( !AngleRhoHits )
 				continue;
 		
-			const MinPixelHits = 3;	//	this is now scored so scales
-			const MinPercentile = 0.7;	//	might cut off too many un-related weak lines
 			let MinAccumulation = Math.max( MinPixelHits, CellMaxAccum[CellIndex]*MinPercentile );
 		
 		
@@ -335,14 +432,15 @@ export async function GetLineSegments(Image,RenderContext=null)
 					
 					//	only best in each cell...
 					//	kinda works
-					//if ( HitCount != CellMaxAccum[CellIndex] )
-					//	continue;
+					if ( OnlyBestInCell )
+						if ( HitCount != CellMaxAccum[CellIndex] )
+							continue;
 					if (HitCount<MinAccumulation)
 						continue; 
-					
+
 					//	see if there's a better scoring neighbour
-					let AngleRadius = 10;
-					let RhoRadius = 10;
+					let AngleRadius = NeighbourSearch_AngleRadius;
+					let RhoRadius = NeighbourSearch_RhoRadius;
 					let BetterNeighbourCount = 0;
 					let SameNeighbourCount = 0;
 					for ( let na=AngleIndex-AngleRadius;	na<=AngleIndex+AngleRadius;	na++ )
@@ -362,8 +460,8 @@ export async function GetLineSegments(Image,RenderContext=null)
 					}
 					if ( BetterNeighbourCount > 0 )
 						continue;
-					if ( SameNeighbourCount > 0 )
-						console.log(`SameNeighbourCount=${SameNeighbourCount}`);
+					//if ( SameNeighbourCount > 0 )
+						//console.log(`SameNeighbourCount=${SameNeighbourCount}`);
 					MaxAccumulation = Math.max( MaxAccumulation, HitCount );
 					
 					{
@@ -388,17 +486,16 @@ export async function GetLineSegments(Image,RenderContext=null)
 		const CellRect = GetCellRect(CellIndex);
 		CellHits[CellIndex]++;
 		
-		//x -= drawingWidth / 2;
-		//y -= drawingHeight / 2;
 		x -= CellRect.MiddleX;
 		y -= CellRect.MiddleY;
 		
 		for ( let AngleIndex=0;	AngleIndex<AngleCount;	AngleIndex++ ) 
 		{
-			//let Theta = (thetaIndex/AngleCount) * (Math.PI);
-			//rho = rhoMax + x * Math.cos(Theta) + y * Math.sin(Theta);
-			let rho = rhoMax + x * cosTable[AngleIndex] + y * sinTable[AngleIndex];
-			rho >>= 1;
+			let Theta = (AngleIndex/AngleCount) * (Math.PI);
+			let rho = rhoMax + x * Math.cos(Theta) + y * Math.sin(Theta);
+			//let rho = rhoMax + x * cosTable[AngleIndex] + y * sinTable[AngleIndex];
+			//rho >>= 1;
+			rho = Math.floor(rho);
 			
 			CellAngleRhoHits[CellIndex][AngleIndex] = CellAngleRhoHits[CellIndex][AngleIndex] || [];
 			CellAngleRhoHits[CellIndex][AngleIndex][rho] = CellAngleRhoHits[CellIndex][AngleIndex][rho] || 0;
@@ -414,21 +511,30 @@ export async function GetLineSegments(Image,RenderContext=null)
 	}
 	
 	
-	const Pixels = Image.GetPixelBuffer();
-	for ( let p=0;	p<Pixels.length;	p+=4 )
+	//	score
+	for ( let y=0;	y<ImageHeight;	y++ )
 	{
-		const Index = p/4;
-		const rgba = Pixels.slice( p, p+4 );
-		const Alpha = rgba[0];
-		if ( Alpha < 1 )
-			continue;
-		const x = Index % ImageWidth;
-		const y = Math.floor( Index / ImageWidth );
-		OnPixel(x,y, Alpha/255 );
+		for ( let x=0;	x<ImageWidth;	x++ )
+		{
+			const Score = GetPixelScore(x,y);
+			if ( Score <= 0 )
+				continue;
+			OnPixel(x,y, Score);
+		}
 	}
+
+	//	extract lines
 	findMaxInHough();
 	
+	function NormaliseLineSegment(Line)
+	{
+		Line[0][0] /= ImageWidth;
+		Line[0][1] /= ImageHeight;
+		Line[1][0] /= ImageWidth;
+		Line[1][1] /= ImageHeight;
+		return Line.slice(0,2);
+	}
+	LineSegments = LineSegments.map(NormaliseLineSegment);
 
-	
 	return LineSegments;
 }
