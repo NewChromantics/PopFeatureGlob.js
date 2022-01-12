@@ -21,6 +21,7 @@ bool IsBright(int Offsetx,int Offsety)
 void main()
 {
 	bool SelfBright = IsBright(0,0);
+	float DistanceToBright = SelfBright ? 0.0 : 99.0;
 	
 	int BrightCount = 0;
 	int NeighbourCount = 0;
@@ -35,6 +36,10 @@ void main()
 			bool NeighbourBright = IsBright(x,y);
 			BrightCount += NeighbourBright ? 1 : 0;
 			NeighbourCount++;
+			
+			float NeighbourDistance = length( vec2(x,y) ); 
+			if ( NeighbourBright )
+				DistanceToBright = max( DistanceToBright, NeighbourDistance );
 		}
 	}
 
@@ -46,7 +51,21 @@ void main()
 			SelfBright = false;
 	}
 	
-	gl_FragColor = SelfBright ? vec4(1,1,1,1) : vec4(0,0,0,1);
+		
+	DistanceToBright = DistanceToBright/float(DILATE_RADIUS*2);
+	float Score;
+	if ( DistanceToBright > 1.0 )
+	{
+		Score = 0.0;
+	}
+	else
+	{
+		//	set a min value for the output
+		float MinScore = 0.2;
+		Score = mix( 1.0, MinScore, DistanceToBright );
+	}
+
+	gl_FragColor = vec4( Score, Score, Score, 1 );
 }
 
 `;
