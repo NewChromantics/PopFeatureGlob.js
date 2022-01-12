@@ -184,10 +184,17 @@ export async function GetLineSegments(Image,RenderContext=null)
 	let drawingWidth = 100;
 	let drawingHeight = 100;
 	var rhoMax = Math.sqrt(drawingWidth * drawingWidth + drawingHeight * drawingHeight);
-	const CellSize = [30,30];
+	const CellSize = [25,25];
 	const CellCount = CellSize[0] * CellSize[1];
-	var accum = new Array(AngleCount);
+	const CellAngleRhoHits = new Array(CellCount);
+	const CellHits = new Array(CellCount).fill(0);
+	const CellMaxAccum = new Array(CellCount).fill(0);
 	
+	function Lerp(From,To,Time)
+	{
+		return From + ( (To-From)*Time );
+	}
+		
 	function GetCellXy(x,y)
 	{
 		const cx = Math.floor( x / ImageWidth * CellSize[0]);
@@ -213,6 +220,8 @@ export async function GetLineSegments(Image,RenderContext=null)
 		Rect.Right = Math.floor(Right * ImageWidth);
 		Rect.Top = Math.floor(Top * ImageHeight);
 		Rect.Bottom = Math.floor(Bottom * ImageHeight);
+		Rect.MiddleX = Math.floor( Lerp(Left,Right,0.5) * ImageWidth );
+		Rect.MiddleY = Math.floor( Lerp(Top,Bottom,0.5) * ImageHeight );
 		return Rect;
 	}
 	
@@ -240,12 +249,17 @@ export async function GetLineSegments(Image,RenderContext=null)
 	{
 		//	this needs to work out the max for that row's length in a window
 		//	otherwise we wont hit corners
-		let MinAccumulation = 30;
 		let MaxAccumulation = 0;
 		
 		
 		function OnHoughHit(Rho,AngleIndex,HitCount,CellIndex)
 		{
+			const Rect = GetCellRect(CellIndex);
+			const TopLeft = [Rect.Left,Rect.Top];
+			const TopRight = [Rect.Right,Rect.Top];
+			const BottomRight = [Rect.Right,Rect.Bottom];
+			const BottomLeft = [Rect.Left,Rect.Bottom];
+
 			// now to backproject into drawing space
 			Rho<<=1; // accumulator is bitshifted
 			Rho-=rhoMax; /// accumulator has rhoMax added
@@ -255,23 +269,18 @@ export async function GetLineSegments(Image,RenderContext=null)
 			
 			let LineWidth = 1000;
 			
-			var x1=a*Rho+LineWidth*(-b);
-			var y1=(b*Rho+LineWidth*(a));
-			var x2=a*Rho-LineWidth*(-b);
-			var y2=(b*Rho-LineWidth*(a));
-			x1 += drawingWidth/2;
-			x2 += drawingWidth/2;
-			y1 += drawingHeight/2;
-			y2 += drawingHeight/2;
+			let x1=a*Rho+LineWidth*(-b);
+			let y1=(b*Rho+LineWidth*(a));
+			let x2=a*Rho-LineWidth*(-b);
+			let y2=(b*Rho-LineWidth*(a));
+			x1 += Rect.MiddleX;
+			x2 += Rect.MiddleX;
+			y1 += Rect.MiddleY;
+			y2 += Rect.MiddleY;
 			let Start = [x1,y1];
 			let End = [x2,y2];
 			
 				
-			const Rect = GetCellRect(CellIndex);
-			const TopLeft = [Rect.Left,Rect.Top];
-			const TopRight = [Rect.Right,Rect.Top];
-			const BottomRight = [Rect.Right,Rect.Bottom];
-			const BottomLeft = [Rect.Left,Rect.Bottom];
 				
 			let ImageEdges = 
 			[
@@ -292,22 +301,71 @@ export async function GetLineSegments(Image,RenderContext=null)
 			//OnLine( Start, End );
 		}
 		
-		for (let AngleIndex=0;AngleIndex<AngleCount;AngleIndex++) 
+		
+		for ( let CellIndex=0;	CellIndex<CellCount;	CellIndex++ )
 		{
-			for (let rho=0;	rho<accum[AngleIndex].length;	rho++) 
+			const AngleRhoHits = CellAngleRhoHits[CellIndex];
+			if ( !AngleRhoHits )
+				continue;
+		
+			const MinPixelHits = 3;	//	this is now scored so scales
+			const MinPercentile = 0.7;	//	might cut off too many un-related weak lines
+			let MinAccumulation = Math.max( MinPixelHits, CellMaxAccum[CellIndex]*MinPercentile );
+		
+		
+			//	would be good to store angle*rho as a quad tree to find best neighbours
+		
+			for (let AngleIndex=0;	AngleIndex<AngleCount;	AngleIndex++ ) 
 			{
-				if ( !accum[AngleIndex][rho] )
+				const RhoHits = AngleRhoHits[AngleIndex];
+				if ( !RhoHits )
 					continue;
-				if ( LineSegments.length > 3000 )
+
+				if ( LineSegments.length > 9000 )
 				{
 					console.warn(`Too many hits`);
 					break;
 				}
-				for ( let CellIndex=0;	CellIndex<CellCount;	CellIndex++ )
+					
+				for (let rho=0;	rho<RhoHits.length;	rho++) 
 				{
-					let HitCount = accum[AngleIndex][rho][CellIndex];
-					MaxAccumulation = Math.max( MaxAccumulation, HitCount||0 );
-					if (HitCount>MinAccumulation) 
+					let HitCount = RhoHits[rho]||0;
+					if ( !HitCount )
+						continue;
+					
+					//	only best in each cell...
+					//	kinda works
+					//if ( HitCount != CellMaxAccum[CellIndex] )
+					//	continue;
+					if (HitCount<MinAccumulation)
+						continue; 
+					
+					//	see if there's a better scoring neighbour
+					let AngleRadius = 10;
+					let RhoRadius = 10;
+					let BetterNeighbourCount = 0;
+					let SameNeighbourCount = 0;
+					for ( let na=AngleIndex-AngleRadius;	na<=AngleIndex+AngleRadius;	na++ )
+					{
+						for ( let nr=rho-RhoRadius;	nr<=rho+RhoRadius;	nr++ )
+						{
+							if ( nr==rho || na==AngleIndex )
+								continue;
+							if ( !AngleRhoHits[na] )
+								continue;
+							let NeighbourHitCount = AngleRhoHits[na][nr] || 0
+							if ( NeighbourHitCount > HitCount )
+								BetterNeighbourCount++;
+							if ( NeighbourHitCount == HitCount )
+								SameNeighbourCount++;
+						}
+					}
+					if ( BetterNeighbourCount > 0 )
+						continue;
+					if ( SameNeighbourCount > 0 )
+						console.log(`SameNeighbourCount=${SameNeighbourCount}`);
+					MaxAccumulation = Math.max( MaxAccumulation, HitCount );
+					
 					{
 						OnHoughHit( rho, AngleIndex, HitCount, CellIndex );
 					}
@@ -316,37 +374,43 @@ export async function GetLineSegments(Image,RenderContext=null)
 		}
 		
 		console.log(`Max accumulation is ${MaxAccumulation}`);
-		
-
+		console.log(`Lines found ${LineSegments.length}`);
 	}
 
+	
 	
 	
 	// Classical implementation.
-	function houghAccClassical(x, y) 
+	function houghAccClassical(x, y,Score) 
 	{
-		let Pos = [x,y];
-		var rho;
-		x -= drawingWidth / 2;
-		y -= drawingHeight / 2;
-		for ( let thetaIndex=0;	thetaIndex<AngleCount;	thetaIndex++ ) 
+		const CellIndex = GetCellIndex(x,y);
+		CellAngleRhoHits[CellIndex] = CellAngleRhoHits[CellIndex] || new Array(AngleCount);
+		const CellRect = GetCellRect(CellIndex);
+		CellHits[CellIndex]++;
+		
+		//x -= drawingWidth / 2;
+		//y -= drawingHeight / 2;
+		x -= CellRect.MiddleX;
+		y -= CellRect.MiddleY;
+		
+		for ( let AngleIndex=0;	AngleIndex<AngleCount;	AngleIndex++ ) 
 		{
 			//let Theta = (thetaIndex/AngleCount) * (Math.PI);
 			//rho = rhoMax + x * Math.cos(Theta) + y * Math.sin(Theta);
-			rho = rhoMax + x * cosTable[thetaIndex] + y * sinTable[thetaIndex];
+			let rho = rhoMax + x * cosTable[AngleIndex] + y * sinTable[AngleIndex];
 			rho >>= 1;
 			
-			const CellIndex = GetCellIndex( Pos[0], Pos[1] );
-			accum[thetaIndex] = accum[thetaIndex] || [];
-			accum[thetaIndex][rho] = accum[thetaIndex][rho] || [];
-			accum[thetaIndex][rho][CellIndex] = accum[thetaIndex][rho][CellIndex] || 0;
-			accum[thetaIndex][rho][CellIndex]++;
+			CellAngleRhoHits[CellIndex][AngleIndex] = CellAngleRhoHits[CellIndex][AngleIndex] || [];
+			CellAngleRhoHits[CellIndex][AngleIndex][rho] = CellAngleRhoHits[CellIndex][AngleIndex][rho] || 0;
+			CellAngleRhoHits[CellIndex][AngleIndex][rho] += Score;
+			
+			CellMaxAccum[CellIndex] = Math.max( CellMaxAccum[CellIndex], CellAngleRhoHits[CellIndex][AngleIndex][rho] ); 
 		}
 	}
 	
-	function OnPixel(x,y)
+	function OnPixel(x,y,Score)
 	{
-		houghAccClassical(x,y);
+		houghAccClassical(x,y,Score);
 	}
 	
 	
@@ -356,11 +420,11 @@ export async function GetLineSegments(Image,RenderContext=null)
 		const Index = p/4;
 		const rgba = Pixels.slice( p, p+4 );
 		const Alpha = rgba[0];
-		if ( Alpha < 10 )
+		if ( Alpha < 1 )
 			continue;
 		const x = Index % ImageWidth;
 		const y = Math.floor( Index / ImageWidth );
-		OnPixel(x,y);
+		OnPixel(x,y, Alpha/255 );
 	}
 	findMaxInHough();
 	
