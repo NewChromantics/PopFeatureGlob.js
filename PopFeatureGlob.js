@@ -199,15 +199,21 @@ export async function GetLineSegments(Image,RenderContext=null)
 	const AngleCount = 180;	//	360 does give more accurate lines
 	const NeighbourSearch_AngleDegreeRange = 10;
 	const NeighbourSearch_AngleRadius = Math.max( 1, Math.floor(NeighbourSearch_AngleDegreeRange * (AngleCount/360) ) );
-	const NeighbourSearch_RhoRadius = 3;
+	const NeighbourSearch_RhoRadius = 5;
 
-	const MergeMaxAngleDistance = 5;
-	const MergeMaxPixelDistance = 3;
+	const MergeMaxAngleDistance = NeighbourSearch_AngleRadius;
+	const MergeMaxPixelDistance = 5;
+	
+	const SkipDuplicates = true;
+	
+	const ClipToLineMinMax = true;
+	
+	const LineDensityMin = 0.5;
 	const OnlyBestInCell = false;
-	const MinPixelHits = 5;	//	this is now scored so scales
-	const MinPercentile = 0.5;	//	might cut off too many un-related weak lines
+	const MinPixelHits = 4;	//	this is now scored so scales
+	const MinPercentile = 0.05;	//	might cut off too many un-related weak lines
 	const SnapPreDuplicate = false;
-	const CellSize = [25,12];
+	const CellSize = [20,10];
 	const CellCount = CellSize[0] * CellSize[1];
 	const CellAngleRhoHits = new Array(CellCount);
 	const CellHits = new Array(CellCount).fill(0);
@@ -294,8 +300,12 @@ export async function GetLineSegments(Image,RenderContext=null)
 	}
 	
 	let DuplicatesSkipped = 0;
+	let NeighboursSkipped = 0;
+	let StartsSnapped = 0;
+	let EndsSnapped = 0;
 	let LineSegments = [];
-	function OnLine(Start,End,AngleIndex)
+	
+	function OnLine(Start,End,AngleIndex,HitCount,Score,Rho)
 	{
 		//	one final snap to sdf
 		if ( SnapPreDuplicate )
@@ -309,53 +319,153 @@ export async function GetLineSegments(Image,RenderContext=null)
 			return Math.hypot( aa[0]-bb[0], aa[1]-bb[1] );
 		}
 		
-		//	merge duplicates
-		function IsDuplicate(Line)
+		
+		//	compare ourselves to every other line
+		//	we could be almost the same
+		//	or we could be very close to joining another
+		//	map all the data so we can pick closest instead
+		//	of picking first-match
+		function GetSnapMeta(Line,LineIndex)
 		{
-			let StartDistance = Distance2( Start, Line[0] );
-			let EndDistance = Distance2( End, Line[1] );
-			let AngleDistance = Math.abs( AngleIndex - Line[2] );
-			if ( StartDistance <= MergeMaxPixelDistance )
-				if ( EndDistance <= MergeMaxPixelDistance )
-					if ( AngleDistance <= MergeMaxAngleDistance )
-						return true;
+			const LineScore = Line.Score;
+
+			const Snap = {};
+			Snap.ScoreDiff = HitCount - LineScore;
+			Snap.LineIndex = LineIndex;
+			Snap.StartStartDistance = Distance2( Start, Line.Start );
+			Snap.EndEndDistance = Distance2( End, Line.End );
+
+			Snap.StartEndDistance = Distance2( Start, Line.End );
+			Snap.EndStartDistance = Distance2( End, Line.Start);
+			
+			let AngleIndexDistance = AngleIndex - Line.AngleIndex;
+			//	rotate angle so 360 is 0 away
+			if ( AngleIndexDistance > AngleCount/2 )
+				AngleIndexDistance -= AngleCount;
+			if ( AngleIndexDistance < -AngleCount/2 )
+				AngleIndexDistance += AngleCount;
+			Snap.AngleIndexDistance = Math.abs(AngleIndexDistance);
+			
+			if ( Snap.AngleIndexDistance > MergeMaxAngleDistance )
+				return null;
+				
+			Snap.DuplicateDistance = Snap.AngleIndexDistance + Snap.StartStartDistance + Snap.EndEndDistance;
+			
+			//	get best "near something" score
+			const StartDistance = Math.min( Snap.StartStartDistance, Snap.StartEndDistance );
+			const EndDistance = Math.min( Snap.EndEndDistance, Snap.EndStartDistance );
+			
+			//	basic scoring atm
+			//	this is basically "distance" rather than score
+			Snap.AnyStartDistance = (Snap.AngleIndexDistance*0) + StartDistance;
+			Snap.AnyEndDistance = (Snap.AngleIndexDistance*0) + EndDistance;
+			
+			const BetterScore = Snap.ScoreDiff > 0;
+			
+			if ( StartDistance <= MergeMaxPixelDistance && BetterScore )
+				Snap.NearestStart = (Snap.StartStartDistance < Snap.StartEndDistance ? Line.Start : Line.End).slice();
+				
+			if ( EndDistance <= MergeMaxPixelDistance && BetterScore )
+				Snap.NearestEnd = (Snap.EndStartDistance < Snap.EndEndDistance ? Line.Start : Line.End).slice();
+			
+			if ( !Snap.NearestStart && !Snap.NearestEnd )
+				return null;
+			
+			return Snap;
+		}
+		
+		function CompareDuplicateSnapMeta(a,b)
+		{
+			if ( a.DuplicateDistance < b.DuplicateDistance )	return -1;
+			if ( a.DuplicateDistance > b.DuplicateDistance )	return 1;
+			return 0;
+		}
+		function CompareStartSnapMeta(a,b)
+		{
+			if ( a.AnyStartDistance < b.AnyStartDistance )	return -1;
+			if ( a.AnyStartDistance > b.AnyStartDistance )	return 1;
+			return 0;
+		}
+		function CompareEndSnapMeta(a,b)
+		{
+			if ( a.AnyEndDistance < b.AnyEndDistance )	return -1;
+			if ( a.AnyEndDistance > b.AnyEndDistance )	return 1;
+			return 0;
+		}
+		
+		function IsDuplicate(SnapMeta)
+		{
+			if ( !SkipDuplicates )
+				return false;
+			if ( !SnapMeta )
+				return false;
+			//	same start & end
+			if ( SnapMeta.StartStartDistance <= MergeMaxPixelDistance )
+				if ( SnapMeta.EndEndDistance <= MergeMaxPixelDistance )
+					return true;
+
+			//	same start & end but reversed
+			//	gr: doesnt seem to occur
+			if ( SnapMeta.StartEndDistance <= MergeMaxPixelDistance )
+				if ( SnapMeta.EndStartDistance <= MergeMaxPixelDistance )
+					return true;
 			return false;
 		}
 		
+		const SnapMetas = LineSegments.map(GetSnapMeta).filter( s=>s!=null );
+		const SnapDuplicateMetas = SnapMetas.sort(CompareDuplicateSnapMeta);
+		const DuplicateSnap = SnapDuplicateMetas[0];
 		
-		if ( LineSegments.some(IsDuplicate) )
+		const SnapLines = false;
+		
+		//	is duplicate
+		if ( IsDuplicate(DuplicateSnap) )
 		{
 			DuplicatesSkipped++;
-			//console.log(`skipping duplicate x${DuplicatesSkipped} skipped`);
 			return;
 		}
 		
-		//Start = SnapToHigherScore( ...Start );
-		//End = SnapToHigherScore( ...End );
-	
-	
-		LineSegments.push( [Start,End,AngleIndex] );
+		if ( SnapLines )
+		{
+			const SnapStartMetas = SnapMetas.sort(CompareStartSnapMeta);
+			const StartSnap = SnapStartMetas[0];
+			if ( StartSnap )
+			{
+				StartsSnapped++;
+				Start = StartSnap && StartSnap.NearestStart ? StartSnap.NearestStart : Start;
+			}
+			
+			const SnapEndMetas = SnapMetas.sort(CompareEndSnapMeta);
+			const EndSnap = SnapEndMetas[0];
+			if ( EndSnap )
+			{
+				EndsSnapped++;
+				End = EndSnap && EndSnap.NearestEnd ? EndSnap.NearestEnd : End;
+			}
+		}
+		
+		const Line = {};
+		Line.Start = Start;
+		Line.End = End;
+		Line.AngleIndex = AngleIndex;
+		Line.Score = Score;
+		Line.Score = HitCount;
+		Line.Rho = Rho;
+		LineSegments.push(Line);
 	}
 	
 	function findMaxInHough() 
 	{
-		//	this needs to work out the max for that row's length in a window
-		//	otherwise we wont hit corners
-		let MaxAccumulation = 0;
-		
-		
 		function OnHoughHit(Rho,AngleIndex,Hit,CellIndex)
 		{
-			const HitCount = Hit.Score;
 			const CellRect = GetCellRect(CellIndex);
-			const Rect = Hit.GetRect();
+			const Rect = ClipToLineMinMax ? Hit.GetRect() : CellRect;
 			
 			const TopLeft = [Rect.Left,Rect.Top];
 			const TopRight = [Rect.Right,Rect.Top];
 			const BottomRight = [Rect.Right,Rect.Bottom];
 			const BottomLeft = [Rect.Left,Rect.Bottom];
 
-			//console.log(Theta,Rho,HitCount);
 			const a = cosTable[AngleIndex];
 			const b = sinTable[AngleIndex];
 			
@@ -388,8 +498,18 @@ export async function GetLineSegments(Image,RenderContext=null)
 			
 			if ( EdgeIntersections.length != 2 )
 				return;
-			OnLine( EdgeIntersections[0], EdgeIntersections[1], AngleIndex );
-			//OnLine( Start, End );
+				
+			Start = EdgeIntersections[0];
+			End = EdgeIntersections[1];
+			//	due to the way we clip, we could have a line with low hit count, and a long length (a few pixels from one line and a few from another)
+			//	we can filter these out where density (hitcount) vs length is very low
+			//	note: hit count is a score, so
+			const LengthPx = Distance2( Start,End );
+			const Density = Hit.HitCount / LengthPx;
+			if ( Density < LineDensityMin )
+				return;
+				
+			OnLine( Start, End, AngleIndex, Hit.HitCount, Hit.Score, Rho );
 		}
 		
 		
@@ -399,8 +519,8 @@ export async function GetLineSegments(Image,RenderContext=null)
 			if ( !AngleRhoHits )
 				continue;
 		
-			let MinAccumulation = Math.max( MinPixelHits, CellMaxAccum[CellIndex]*MinPercentile );
-		
+			let MinAccumulationScore = Math.max( MinPixelHits, CellMaxAccum[CellIndex]*MinPercentile );
+			let MinHitCount = MinPixelHits;
 		
 			//	would be good to store angle*rho as a quad tree to find best neighbours
 		
@@ -416,20 +536,20 @@ export async function GetLineSegments(Image,RenderContext=null)
 					break;
 				}
 					
-				for ( let rho in RhoHits ) 
+				for ( let rhokey in RhoHits ) 
 				{
+					let rho = Number(rhokey);
 					let Hit = RhoHits[rho];
 					if ( !Hit )
 						continue;
 					
-					let HitCount = Hit.Score;
+					let Score = Hit.Score;
 					
-					//	only best in each cell...
-					//	kinda works
+					//	kinda works, but can lose a lot
 					if ( OnlyBestInCell )
-						if ( HitCount != CellMaxAccum[CellIndex] )
+						if ( Score != CellMaxAccum[CellIndex] )
 							continue;
-					if (HitCount<MinAccumulation)
+					if (Score<MinAccumulationScore)
 						continue; 
 
 					//	see if there's a better scoring neighbour
@@ -437,26 +557,38 @@ export async function GetLineSegments(Image,RenderContext=null)
 					let RhoRadius = NeighbourSearch_RhoRadius;
 					let BetterNeighbourCount = 0;
 					let SameNeighbourCount = 0;
-					for ( let na=AngleIndex-AngleRadius;	na<=AngleIndex+AngleRadius;	na++ )
+					for ( let ar=-AngleRadius;	ar<=AngleRadius;	ar++ )
 					{
 						for ( let nr=rho-RhoRadius;	nr<=rho+RhoRadius;	nr++ )
 						{
-							if ( nr==rho || na==AngleIndex )
+							if ( nr==rho || ar==0 )
 								continue;
+							let na = AngleIndex + ar;
+							if ( na >= AngleCount )	na -= AngleCount;
+							if ( na < 0 )			na += AngleCount;
 							if ( !AngleRhoHits[na] )
 								continue;
-							let NeighbourHitCount = AngleRhoHits[na][nr] || 0
-							if ( NeighbourHitCount > HitCount )
+							if ( !AngleRhoHits[na][nr] )
+								continue;
+							let NeighbourScore = AngleRhoHits[na][nr].Score;
+							if ( NeighbourScore > Score )
 								BetterNeighbourCount++;
-							if ( NeighbourHitCount == HitCount )
+							if ( NeighbourScore == Score )
 								SameNeighbourCount++;
 						}
 					}
+					
 					if ( BetterNeighbourCount > 0 )
+					{
+						NeighboursSkipped++;
 						continue;
-					//if ( SameNeighbourCount > 0 )
+					}
+					
+					if ( SameNeighbourCount > 0 )
+					{
 						//console.log(`SameNeighbourCount=${SameNeighbourCount}`);
-					MaxAccumulation = Math.max( MaxAccumulation, HitCount );
+					}
+						
 					
 					{
 						OnHoughHit( rho, AngleIndex, Hit, CellIndex );
@@ -465,7 +597,10 @@ export async function GetLineSegments(Image,RenderContext=null)
 			}
 		}
 		
-		console.log(`Max accumulation is ${MaxAccumulation}`);
+		console.log(`skipped neighbour lines x${NeighboursSkipped}`);
+		console.log(`skipped duplicate lines x${DuplicatesSkipped}`);
+		console.log(`snapped starts x${StartsSnapped}`);
+		console.log(`snapped ends x${EndsSnapped}`);
 		console.log(`Lines found ${LineSegments.length}`);
 	}
 
@@ -474,6 +609,7 @@ export async function GetLineSegments(Image,RenderContext=null)
 		constructor()
 		{
 			this.Score = 0;
+			this.HitCount = 0;
 			//	essentially store a bounding rect for a line
 			//	we can clip against this instead of cell
 			this.Min = null;	//	[x,y]
@@ -483,6 +619,7 @@ export async function GetLineSegments(Image,RenderContext=null)
 		Increment(Score,x,y)
 		{
 			this.Score += Score;
+			this.HitCount += 1;
 			if ( !this.Min )
 			{
 				this.Min = [x,y];
@@ -559,13 +696,29 @@ export async function GetLineSegments(Image,RenderContext=null)
 	
 	function NormaliseLineSegment(Line)
 	{
-		Line[0][0] /= ImageWidth;
-		Line[0][1] /= ImageHeight;
-		Line[1][0] /= ImageWidth;
-		Line[1][1] /= ImageHeight;
-		return Line.slice(0,2);
+		//	oddly makes this more pixel perfefct... css error?
+		//	varies on angle count hmm
+		Line.Start[0]+=1;
+		Line.Start[1]+=1;
+		Line.End[0]+=1;
+		Line.End[1]+=1;
+		
+		Line.Start[0] /= ImageWidth;
+		Line.Start[1] /= ImageHeight;
+		Line.End[0] /= ImageWidth;
+		Line.End[1] /= ImageHeight;
+		
+		return [ Line.Start, Line.End];
 	}
+	function CompareLineScore(a,b)
+	{
+		if ( a[3] > b[3] )	return -1;
+		if ( a[3] < b[3] )	return 1;
+		return 0;
+	}
+	LineSegments = LineSegments.sort( CompareLineScore );
 	LineSegments = LineSegments.map(NormaliseLineSegment);
+	//LineSegments = LineSegments.slice(0,1);
 
 	return LineSegments;
 }

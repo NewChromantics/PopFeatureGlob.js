@@ -5,7 +5,7 @@ varying vec2 FragUv;
 uniform sampler2D InputTexture;
 uniform vec2 InputWidthHeight;
 
-#define DILATE_RADIUS				2
+#define DILATE_RADIUS				3
 #define MIN_BRIGHT_NEIGHBOURS		2	//	noise filter
 #define MIN_NEIGHBOUR_BRIGHTNESS	0.1
 
