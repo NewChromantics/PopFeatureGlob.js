@@ -54,7 +54,7 @@ void main()
 		
 	DistanceToBright = DistanceToBright/float(DILATE_RADIUS*2);
 	float Score;
-	if ( DistanceToBright > 1.0 )
+	if ( DistanceToBright > 1.0 || !SelfBright )
 	{
 		Score = 0.0;
 	}
