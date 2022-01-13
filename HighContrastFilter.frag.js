@@ -141,7 +141,7 @@ bool IsBright(int Offsetx,int Offsety)
 	//Luma = Luma < 0.450 ? 0.0 : 1.0;
 	//gl_FragColor.xyz = vec3(Luma,Luma,Luma);
 	
-	#define LOW_CONTRAST 0.10
+	#define LOW_CONTRAST 0.12
 	//	make low-range areas black
 	if ( MaxLuma-MinLuma < LOW_CONTRAST )
 		return false;
