@@ -39,7 +39,7 @@ void main()
 			
 			float NeighbourDistance = length( vec2(x,y) ); 
 			if ( NeighbourBright )
-				DistanceToBright = max( DistanceToBright, NeighbourDistance );
+				DistanceToBright = min( DistanceToBright, NeighbourDistance );
 		}
 	}
 
@@ -52,7 +52,7 @@ void main()
 	}
 	
 		
-	DistanceToBright = DistanceToBright/float(DILATE_RADIUS*2);
+	DistanceToBright = DistanceToBright/float(DILATE_RADIUS*1);
 	float Score;
 	if ( DistanceToBright > 1.0 || !SelfBright )
 	{
@@ -61,7 +61,7 @@ void main()
 	else
 	{
 		//	set a min value for the output
-		float MinScore = 0.2;
+		float MinScore = 0.0;
 		Score = mix( 1.0, MinScore, DistanceToBright );
 	}
 

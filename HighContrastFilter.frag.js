@@ -75,6 +75,7 @@ void IncreaseArrayIndexCount(inout int Array[HISTOGRAM_BIN_COUNT],int Index)
 bool ContainsGreen(vec3 Rgb)
 {
 	//	todo: get hue angle?
+	//	also expects quite bright
 	bool Green = Rgb.y > 0.61;
 	bool White = max(Rgb.x,Rgb.z) > 0.6;
 	//return true; 
