@@ -698,7 +698,7 @@ export async function GetLineSegments(Image,RenderContext=null)
 					
 					if ( SameNeighbourCount > 0 )
 					{
-						console.log(`SameNeighbourCount=${SameNeighbourCount}`);
+						//console.log(`SameNeighbourCount=${SameNeighbourCount}`);
 						if ( SkipIfSameNeighbours )
 						{
 							SameNeighboursSkipped++;
