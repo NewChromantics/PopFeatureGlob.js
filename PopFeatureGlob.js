@@ -192,9 +192,9 @@ export async function GetLineSegments(Image,RenderContext=null)
 	
 	//	gr: angles get way more innaccurate the further from the cell center they are
 	const AngleCount = 360;	//	360 does give more accurate lines
-	const NeighbourSearch_AngleDegreeRange = 15;
+	const NeighbourSearch_AngleDegreeRange = 10;
 	const NeighbourSearch_AngleRadius = Math.max( 1, Math.floor(NeighbourSearch_AngleDegreeRange * (AngleCount/360) ) );
-	const NeighbourSearch_RhoRadius = 7;
+	const NeighbourSearch_RhoRadius = 5;
 
 	const MergeMaxAngleDistance = NeighbourSearch_AngleRadius;
 	const MergeMaxPixelDistance = 4;
@@ -208,18 +208,18 @@ export async function GetLineSegments(Image,RenderContext=null)
 	//	helps where min/max of cell becomes fuzzy regarding xy search
 	const PadClippingBox = 1;	
 	
-	const MergeLineDistance = 4;	//	smaller lines within this distance are culled
+	const MergeLineDistance = 8;	//	smaller lines within this distance are culled
 	const SkipIfSameNeighbours = false;	//	for debugging, we'll lose lines!
 	const LineDensityUseScore = true;	//	false better on small images...
 	const NeighbourCompareDensity = false;	//	else score
-	const LineDensityMin = 0.80;
+	const LineDensityMin = 0.74;
 	const MinPixelScore = 4;	//	this is now scored so scales
-	const MinPixelHits = 10;
+	const MinPixelHits = 6;
 	const MinPercentile = 0.011;	//	might cut off too many un-related weak lines
 	const SnapToImagePreDuplicate = true;
 	const SnapToImagePixelRadius = 5;
-	const CellsWide = 20;//Math.floor( (1/640) * ImageWidth );
-	const CellsHigh = 8;//Math.floor( (1/480) * ImageHeight );
+	const CellsWide = 18;//Math.floor( (1/640) * ImageWidth );
+	const CellsHigh = 10;//Math.floor( (1/480) * ImageHeight );
 	const CellSize = [CellsWide,CellsHigh];
 	const CellCount = CellSize[0] * CellSize[1];
 	const CellAngleRhoHits = new Array(CellCount);
@@ -327,19 +327,32 @@ export async function GetLineSegments(Image,RenderContext=null)
 	let StartsSnapped = 0;
 	let EndsSnapped = 0;
 	let LineSegments = [];
+	let NewLines = [];
 	
-	function OnLine(NewLine)
+	function OnNewLine(NewLine)
 	{
-		let Start = NewLine.Start.slice();
-		let End = NewLine.End.slice();
+		NewLines.push(NewLine);
+	}
+	
+	function SnapLineToImage(Line)
+	{
+		if ( !SnapToImagePreDuplicate )
+			return;
+			
+		const Start = SnapToHigherScore( ...Line.Start );
+		const End = SnapToHigherScore( ...Line.End );
+		Line.Start[0] = Start[0];
+		Line.Start[1] = Start[1];
+		Line.End[0] = End[0];
+		Line.End[1] = End[1];
 		
-		//	one final snap to sdf
-		if ( SnapToImagePreDuplicate )
-		{
-			Start = SnapToHigherScore( ...Start );
-			End = SnapToHigherScore( ...End );
-		}
-		
+		//	recalc some stuff
+		//	gr: dont recalc density?
+		Line.LengthPx = Distance2( Line.Start, Line.End );
+	}
+	
+	function AddLine(NewLine)
+	{
 		function Distance2(aa,bb)
 		{
 			return Math.hypot( aa[0]-bb[0], aa[1]-bb[1] );
@@ -397,8 +410,8 @@ export async function GetLineSegments(Image,RenderContext=null)
 			if ( EndDistance <= MergeMaxPixelDistance && BetterScore )
 				Snap.NearestEnd = (Snap.EndStartDistance < Snap.EndEndDistance ? Line.Start : Line.End).slice();
 			
-			if ( !Snap.NearestStart && !Snap.NearestEnd )
-				return null;
+			//if ( !Snap.NearestStart && !Snap.NearestEnd )
+			//	return null;
 			
 			return Snap;
 		}
@@ -467,6 +480,9 @@ export async function GetLineSegments(Image,RenderContext=null)
 			DuplicatesSkipped++;
 			return;
 		}
+		
+		let Start = NewLine.Start;
+		let End = NewLine.End;
 		
 		if ( SnapNewLines )
 		{
@@ -690,10 +706,24 @@ export async function GetLineSegments(Image,RenderContext=null)
 						}
 					}
 					
-					OnLine(HitLine);
+					OnNewLine(HitLine);
 				}
 			}
 		}
+		
+		function CompareLineLengths(a,b)
+		{
+			if ( a.LengthPx > b.LengthPx )	return -1;
+			if ( a.LengthPx < b.LengthPx )	return 1;
+			return 0;
+		}
+		
+		//	sort lines bigger to smaller so overlapped 
+		//	lines are more likely to get culled
+		NewLines.forEach( SnapLineToImage );
+		NewLines = NewLines.sort( CompareLineLengths );
+		NewLines.forEach( AddLine );
+		
 		
 		console.log(`skipped neighbour lines x${NeighboursSkipped}`);
 		console.log(`skipped same neighbour lines x${SameNeighboursSkipped}`);
