@@ -3,7 +3,7 @@
 //		figure out this later if it's ever used outside the holosports editor
 //	for native (with PopEngine), irrelevent!
 import Pop from '../PopEngine/PopEngine.js'
-import {GetLineLineIntersection,Distance2,Lerp} from '../PopEngine/Math.js'
+import {GetLineLineIntersection,Distance2,Length2,Lerp} from '../PopEngine/Math.js'
 
 //	geo, shaders etc
 import * as GlobAssets from './GlobAssets.js'
@@ -185,37 +185,41 @@ export async function GetLineSegments(Image,RenderContext=null)
 		return GetPixelScoreFromIndex(Index); 
 	}
 
-/*
-	const LineSegments = 
-	[
-		[	[0.1,0.5],	[0.9,0.5]	],
-		[	[0.5,0.1],	[0.5,0.9]	],
-	];
-	*/
+
 	//	do hough accumulation
 	//	first implementation via 
 	//	https://github.com/gmarty/hough-transform-js/blob/master/hough-transform.js
 	
-	const AngleCount = 180;	//	360 does give more accurate lines
-	const NeighbourSearch_AngleDegreeRange = 20;
+	//	gr: angles get way more innaccurate the further from the cell center they are
+	const AngleCount = 360;	//	360 does give more accurate lines
+	const NeighbourSearch_AngleDegreeRange = 15;
 	const NeighbourSearch_AngleRadius = Math.max( 1, Math.floor(NeighbourSearch_AngleDegreeRange * (AngleCount/360) ) );
-	const NeighbourSearch_RhoRadius = 5;
+	const NeighbourSearch_RhoRadius = 7;
 
 	const MergeMaxAngleDistance = NeighbourSearch_AngleRadius;
 	const MergeMaxPixelDistance = 4;
 	
 	const SkipDuplicates = true;
-	
+	const SnapNewLines = false;
+
 	const ClipToLineMinMax = true;
 	
-	const LineDensityUseScore = true;
+	//	artificially makes lines a bit longer. but also decreases density
+	//	helps where min/max of cell becomes fuzzy regarding xy search
+	const PadClippingBox = 1;	
+	
+	const SkipIfSameNeighbours = false;	//	for debugging, we'll lose lines!
+	const LineDensityUseScore = true;	//	false better on small images...
 	const NeighbourCompareDensity = false;	//	else score
-	const LineDensityMin = 0.90;
-	const MinPixelScore = 10;	//	this is now scored so scales
-	const MinPixelHits = 5;
-	const MinPercentile = 0.11;	//	might cut off too many un-related weak lines
-	const SnapPreDuplicate = false;
-	const CellSize = [20,12];
+	const LineDensityMin = 0.70;
+	const MinPixelScore = 4;	//	this is now scored so scales
+	const MinPixelHits = 10;
+	const MinPercentile = 0.011;	//	might cut off too many un-related weak lines
+	const SnapToImagePreDuplicate = true;
+	const SnapToImagePixelRadius = 5;
+	const CellsWide = 20;//Math.floor( (1/640) * ImageWidth );
+	const CellsHigh = 8;//Math.floor( (1/480) * ImageHeight );
+	const CellSize = [CellsWide,CellsHigh];
 	const CellCount = CellSize[0] * CellSize[1];
 	const CellAngleRhoHits = new Array(CellCount);
 	const CellHits = new Array(CellCount).fill(0);
@@ -264,9 +268,15 @@ export async function GetLineSegments(Image,RenderContext=null)
 	function SnapToHigherScore(origx,origy)
 	{
 		//	gr: hmm should this go along the line, or radius fine?
-		let SearchRad = 2;
+		let SearchRad = SnapToImagePixelRadius;
 		let BestPos = [origx,origy];
 		let Best = GetPixelScore(...BestPos);
+		let BestDistance = 0;
+		
+		if ( Best == 0 )
+		{
+			//console.log(`Got best of zero for a line endpoint?`);
+		}
 		
 		//	avoid snapping up-left by starting from center and move outward
 		for ( let rad=1;	rad<=SearchRad;	rad++ )
@@ -276,8 +286,16 @@ export async function GetLineSegments(Image,RenderContext=null)
 			function Try(x,y)
 			{
 				const Score = GetPixelScore(origx+x,origy+y);
-				if ( Score <= Best )
+				if ( Score < Best )
 					return;
+				let Distance = Length2([x,y]);
+				//	if same score, pick distance
+				if ( Score == Best )
+				{
+					if ( Distance >= BestDistance )
+						return;
+				}
+				BestDistance = Distance;
 				Best = Score;
 				BestPos = [origx+x,origy+y];
 			}
@@ -303,6 +321,7 @@ export async function GetLineSegments(Image,RenderContext=null)
 	
 	let DuplicatesSkipped = 0;
 	let NeighboursSkipped = 0;
+	let SameNeighboursSkipped = 0;
 	let StartsSnapped = 0;
 	let EndsSnapped = 0;
 	let LineSegments = [];
@@ -313,7 +332,7 @@ export async function GetLineSegments(Image,RenderContext=null)
 		let End = NewLine.End.slice();
 		
 		//	one final snap to sdf
-		if ( SnapPreDuplicate )
+		if ( SnapToImagePreDuplicate )
 		{
 			Start = SnapToHigherScore( ...Start );
 			End = SnapToHigherScore( ...End );
@@ -419,7 +438,6 @@ export async function GetLineSegments(Image,RenderContext=null)
 		const SnapDuplicateMetas = SnapMetas.sort(CompareDuplicateSnapMeta);
 		const DuplicateSnap = SnapDuplicateMetas[0];
 		
-		const SnapNewLines = true;
 		
 		//	is duplicate
 		if ( IsDuplicate(DuplicateSnap) )
@@ -456,8 +474,17 @@ export async function GetLineSegments(Image,RenderContext=null)
 	function GetLine(Hit,CellIndex,AngleIndex,Rho)
 	{
 		const CellRect = GetCellRect(CellIndex);
-		const Rect = ClipToLineMinMax ? Hit.GetRect() : CellRect;
-			
+		const HitRect = Hit.GetRect();
+		//	skip 1 pixel lines
+		if ( HitRect.Width == 0 || HitRect.Height == 0 )
+			return null;
+		let Rect = ClipToLineMinMax ? HitRect : CellRect;
+		Rect = Object.assign({},Rect);
+		Rect.Left -= PadClippingBox;
+		Rect.Right += PadClippingBox;
+		Rect.Top -= PadClippingBox;
+		Rect.Bottom += PadClippingBox;
+		
 		const TopLeft = [Rect.Left,Rect.Top];
 		const TopRight = [Rect.Right,Rect.Top];
 		const BottomRight = [Rect.Right,Rect.Bottom];
@@ -495,6 +522,9 @@ export async function GetLineSegments(Image,RenderContext=null)
 		const Line = Object.assign( {}, Hit );
 		Line.Start = EdgeIntersections[0];
 		Line.End = EdgeIntersections[1];
+	
+		Line.Start = Line.Start.map( Math.floor );
+		Line.End = Line.End.map( Math.floor );
 	
 		//	due to the way we clip, we could have a line with low hit count, and a long length (a few pixels from one line and a few from another)
 		//	we can filter these out where density (hitcount) vs length is very low
@@ -557,8 +587,15 @@ export async function GetLineSegments(Image,RenderContext=null)
 					let BetterNeighbourCount = 0;
 					let SameNeighbourCount = 0;
 					
+					const HitLine = GetLine( Hit, CellIndex, AngleIndex, rho );
+					if ( !HitLine )
+						continue;
+					if ( HitLine.Density < LineDensityMin )
+						continue;
+
+					
 					//	return -1 if neighbour better
-					function CompareNeighbour(NeighbourHit)
+					function CompareNeighbour(NeighbourHit,NeighbourAngleIndex,NeighbourRho)
 					{
 						if ( NeighbourCompareDensity )
 						{
@@ -575,6 +612,15 @@ export async function GetLineSegments(Image,RenderContext=null)
 							if ( NeighbourScore > Hit.Score )
 								return -1;
 							if ( NeighbourScore < Hit.Score )
+								return 1;
+								
+							const NeighbourLine = GetLine( NeighbourHit, CellIndex, NeighbourAngleIndex, NeighbourRho );
+							if ( !NeighbourLine )
+								return -1;
+							let NeighbourDensity = NeighbourLine.Density;
+							if ( NeighbourDensity > HitLine.Density )
+								return -1;
+							if ( NeighbourDensity < HitLine.Density )
 								return 1;
 							return 0;
 						}
@@ -598,7 +644,7 @@ export async function GetLineSegments(Image,RenderContext=null)
 							if ( !AngleRhoHits[na][nr] )
 								continue;
 								
-							const Compare = CompareNeighbour( AngleRhoHits[na][nr] );
+							const Compare = CompareNeighbour( AngleRhoHits[na][nr], na, nr );
 							if ( Compare < 0 )
 								BetterNeighbourCount++;
 							if ( Compare == 0 )
@@ -614,21 +660,21 @@ export async function GetLineSegments(Image,RenderContext=null)
 					
 					if ( SameNeighbourCount > 0 )
 					{
-						//console.log(`SameNeighbourCount=${SameNeighbourCount}`);
+						console.log(`SameNeighbourCount=${SameNeighbourCount}`);
+						if ( SkipIfSameNeighbours )
+						{
+							SameNeighboursSkipped++;
+							continue;
+						}
 					}
 					
-					const Line = GetLine( Hit, CellIndex, AngleIndex, rho );
-					if ( !Line )
-						continue;
-					if ( Line.Density < LineDensityMin )
-						continue;
-
-					OnLine(Line);
+					OnLine(HitLine);
 				}
 			}
 		}
 		
 		console.log(`skipped neighbour lines x${NeighboursSkipped}`);
+		console.log(`skipped same neighbour lines x${SameNeighboursSkipped}`);
 		console.log(`skipped duplicate lines x${DuplicatesSkipped}`);
 		console.log(`snapped starts x${StartsSnapped}`);
 		console.log(`snapped ends x${EndsSnapped}`);
@@ -671,6 +717,8 @@ export async function GetLineSegments(Image,RenderContext=null)
 			Rect.Bottom = this.Max[1];
 			Rect.MiddleX = Lerp( Rect.Left, Rect.Right, 0.5 );
 			Rect.MiddleY = Lerp( Rect.Top, Rect.Bottom, 0.5 );
+			Rect.Width = Rect.Right - Rect.Left;
+			Rect.Height = Rect.Bottom - Rect.Top;
 			return Rect;
 		}
 	};
