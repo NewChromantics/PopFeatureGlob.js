@@ -191,7 +191,7 @@ export async function GetLineSegments(Image,RenderContext=null)
 	//	https://github.com/gmarty/hough-transform-js/blob/master/hough-transform.js
 	
 	//	gr: angles get way more innaccurate the further from the cell center they are
-	const AngleCount = 360;	//	360 does give more accurate lines
+	const AngleCount = 180;	//	360 does give more accurate lines
 	const NeighbourSearch_AngleDegreeRange = 10;
 	const NeighbourSearch_AngleRadius = Math.max( 1, Math.floor(NeighbourSearch_AngleDegreeRange * (AngleCount/360) ) );
 	const NeighbourSearch_RhoRadius = 5;
