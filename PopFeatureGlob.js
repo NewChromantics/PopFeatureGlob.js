@@ -3,7 +3,7 @@
 //		figure out this later if it's ever used outside the holosports editor
 //	for native (with PopEngine), irrelevent!
 import Pop from '../PopEngine/PopEngine.js'
-import {GetLineLineIntersection,Distance2,Length2,Lerp} from '../PopEngine/Math.js'
+import {GetLineDistanceToLine,GetLineLineIntersection,Distance2,Length2,Lerp} from '../PopEngine/Math.js'
 
 //	geo, shaders etc
 import * as GlobAssets from './GlobAssets.js'
@@ -208,10 +208,11 @@ export async function GetLineSegments(Image,RenderContext=null)
 	//	helps where min/max of cell becomes fuzzy regarding xy search
 	const PadClippingBox = 1;	
 	
+	const MergeLineDistance = 4;	//	smaller lines within this distance are culled
 	const SkipIfSameNeighbours = false;	//	for debugging, we'll lose lines!
 	const LineDensityUseScore = true;	//	false better on small images...
 	const NeighbourCompareDensity = false;	//	else score
-	const LineDensityMin = 0.70;
+	const LineDensityMin = 0.80;
 	const MinPixelScore = 4;	//	this is now scored so scales
 	const MinPixelHits = 10;
 	const MinPercentile = 0.011;	//	might cut off too many un-related weak lines
@@ -319,6 +320,7 @@ export async function GetLineSegments(Image,RenderContext=null)
 		return BestPos;
 	}
 	
+	let LineDistanceDuplicates = 0;
 	let DuplicatesSkipped = 0;
 	let NeighboursSkipped = 0;
 	let SameNeighboursSkipped = 0;
@@ -354,6 +356,11 @@ export async function GetLineSegments(Image,RenderContext=null)
 			const Snap = {};
 			Snap.ScoreDiff = NewLine.Score - Line.Score;
 			Snap.LineIndex = LineIndex;
+			
+			//	smaller the distance the more these lines overlap
+			//	distance will be zero if its smaller & on the line
+			Snap.LineDistance = GetLineDistanceToLine( [NewLine.Start,NewLine.End], [Line.Start,Line.End] );
+			
 			Snap.StartStartDistance = Distance2( NewLine.Start, Line.Start );
 			Snap.EndEndDistance = Distance2( NewLine.End, Line.End );
 
@@ -402,6 +409,12 @@ export async function GetLineSegments(Image,RenderContext=null)
 			if ( a.DuplicateDistance > b.DuplicateDistance )	return 1;
 			return 0;
 		}
+		function CompareDistanceSnapMeta(a,b)
+		{
+			if ( a.LineDistance < b.LineDistance )	return -1;
+			if ( a.LineDistance > b.LineDistance )	return 1;
+			return 0;
+		}
 		function CompareStartSnapMeta(a,b)
 		{
 			if ( a.AnyStartDistance < b.AnyStartDistance )	return -1;
@@ -421,6 +434,7 @@ export async function GetLineSegments(Image,RenderContext=null)
 				return false;
 			if ( !SnapMeta )
 				return false;
+
 			//	same start & end
 			if ( SnapMeta.StartStartDistance <= MergeMaxPixelDistance )
 				if ( SnapMeta.EndEndDistance <= MergeMaxPixelDistance )
@@ -431,11 +445,19 @@ export async function GetLineSegments(Image,RenderContext=null)
 			if ( SnapMeta.StartEndDistance <= MergeMaxPixelDistance )
 				if ( SnapMeta.EndStartDistance <= MergeMaxPixelDistance )
 					return true;
+
+			if ( SnapMeta.LineDistance <= MergeLineDistance )
+			{
+				LineDistanceDuplicates++;
+				return true;
+			}
+				
 			return false;
 		}
 		
 		const SnapMetas = LineSegments.map(GetSnapMeta).filter( s=>s!=null );
-		const SnapDuplicateMetas = SnapMetas.sort(CompareDuplicateSnapMeta);
+		//const SnapDuplicateMetas = SnapMetas.sort(CompareDuplicateSnapMeta);
+		const SnapDuplicateMetas = SnapMetas.sort(CompareDistanceSnapMeta);
 		const DuplicateSnap = SnapDuplicateMetas[0];
 		
 		
@@ -675,7 +697,7 @@ export async function GetLineSegments(Image,RenderContext=null)
 		
 		console.log(`skipped neighbour lines x${NeighboursSkipped}`);
 		console.log(`skipped same neighbour lines x${SameNeighboursSkipped}`);
-		console.log(`skipped duplicate lines x${DuplicatesSkipped}`);
+		console.log(`skipped duplicate lines x${DuplicatesSkipped} (By line distance x${LineDistanceDuplicates})`);
 		console.log(`snapped starts x${StartsSnapped}`);
 		console.log(`snapped ends x${EndsSnapped}`);
 		console.log(`Lines found ${LineSegments.length}`);
