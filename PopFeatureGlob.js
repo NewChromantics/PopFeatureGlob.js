@@ -192,9 +192,9 @@ export async function GetLineSegments(Image,RenderContext=null)
 	
 	//	gr: angles get way more innaccurate the further from the cell center they are
 	const AngleCount = 90;	//	360 does give more accurate lines
-	const NeighbourSearch_AngleDegreeRange = 10;
+	const NeighbourSearch_AngleDegreeRange = 2;
 	const NeighbourSearch_AngleRadius = Math.max( 1, Math.floor(NeighbourSearch_AngleDegreeRange * (AngleCount/360) ) );
-	const NeighbourSearch_RhoRadius = 5;
+	const NeighbourSearch_RhoRadius = 2;
 
 	const MergeMaxAngleDistance = NeighbourSearch_AngleRadius;
 	const MergeMaxPixelDistance = 4;
@@ -215,7 +215,6 @@ export async function GetLineSegments(Image,RenderContext=null)
 	const LineDensityMin = 0.70;
 	const MinPixelScore = 4;	//	this is now scored so scales
 	const MinPixelHits = 4;
-	const MinPercentile = 0.011;	//	might cut off too many un-related weak lines
 	const SnapToImagePreDuplicate = true;
 	const SnapToImagePixelRadius = 5;
 	const CellsWide = 26;//Math.floor( (1/640) * ImageWidth );
@@ -223,8 +222,6 @@ export async function GetLineSegments(Image,RenderContext=null)
 	const CellSize = [CellsWide,CellsHigh];
 	const CellCount = CellSize[0] * CellSize[1];
 	const CellAngleRhoHits = new Array(CellCount);
-	const CellHits = new Array(CellCount).fill(0);
-	const CellMaxAccum = new Array(CellCount).fill(0);
 	
 		
 	function GetCellXy(x,y)
@@ -257,14 +254,6 @@ export async function GetLineSegments(Image,RenderContext=null)
 		return Rect;
 	}
 	
-	var cosTable = Array(AngleCount);
-	var sinTable = Array(AngleCount);
-	for ( let AngleIndex=0;	AngleIndex<AngleCount;	AngleIndex++ )
-	{
-		let Theta = (AngleIndex/AngleCount) * (Math.PI);
-		cosTable[AngleIndex] = Math.cos(Theta);
-		sinTable[AngleIndex] = Math.sin(Theta);
-	}
 
 	function SnapToHigherScore(origx,origy)
 	{
@@ -528,8 +517,9 @@ export async function GetLineSegments(Image,RenderContext=null)
 		const BottomRight = [Rect.Right,Rect.Bottom];
 		const BottomLeft = [Rect.Left,Rect.Bottom];
 
-		const a = cosTable[AngleIndex];
-		const b = sinTable[AngleIndex];
+		let Theta = (AngleIndex/AngleCount) * (Math.PI);
+		const a = Math.cos(Theta);
+		const b = Math.sin(Theta);
 			
 		let LineWidth = 1000;
 			
@@ -586,7 +576,7 @@ export async function GetLineSegments(Image,RenderContext=null)
 		
 		function FindLinesInCell(CellIndex,AngleRhoHits)
 		{
-			let MinAccumulationScore = Math.max( MinPixelScore, CellMaxAccum[CellIndex]*MinPercentile );
+			let MinAccumulationScore = MinPixelScore;
 			let MinHitCount = MinPixelHits;
 		
 			//	would be good to store angle*rho as a quad tree to find best neighbours
@@ -610,14 +600,10 @@ export async function GetLineSegments(Image,RenderContext=null)
 					if ( !Hit )
 						continue;
 					
-					let Score = Hit.Score;
-					
-					if ( Score < MinAccumulationScore )
+					if ( Hit.Score < MinAccumulationScore )
 						continue; 
 					if ( Hit.HitCount < MinHitCount )
 						continue;
-					//if ( Hit.Density < LineDensityMin )
-					//	continue;
 
 					//	see if there's a better scoring neighbour
 					let AngleRadius = NeighbourSearch_AngleRadius;
@@ -784,7 +770,6 @@ export async function GetLineSegments(Image,RenderContext=null)
 		const CellIndex = GetCellIndex(x,y);
 		CellAngleRhoHits[CellIndex] = CellAngleRhoHits[CellIndex] || new Array(AngleCount);
 		const CellRect = GetCellRect(CellIndex);
-		CellHits[CellIndex]++;
 		
 		x -= CellRect.MiddleX;
 		y -= CellRect.MiddleY;
@@ -798,8 +783,6 @@ export async function GetLineSegments(Image,RenderContext=null)
 			CellAngleRhoHits[CellIndex][AngleIndex] = CellAngleRhoHits[CellIndex][AngleIndex] || [];
 			CellAngleRhoHits[CellIndex][AngleIndex][rho] = CellAngleRhoHits[CellIndex][AngleIndex][rho] || new Hit_t(CellIndex);
 			CellAngleRhoHits[CellIndex][AngleIndex][rho].Increment( Score, Imagex, Imagey );
-			
-			CellMaxAccum[CellIndex] = Math.max( CellMaxAccum[CellIndex], CellAngleRhoHits[CellIndex][AngleIndex][rho].Score ); 
 		}
 	}
 	
