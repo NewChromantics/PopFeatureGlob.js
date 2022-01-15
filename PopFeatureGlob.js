@@ -505,8 +505,7 @@ export async function GetLineSegments(Image,RenderContext=null)
 		//	skip 1 pixel lines
 		if ( HitRect.Width == 0 || HitRect.Height == 0 )
 			return null;
-		let Rect = ClipToLineMinMax ? HitRect : CellRect;
-		Rect = Object.assign({},Rect);
+		let Rect = Object.assign({},HitRect);
 		Rect.Left -= PadClippingBox;
 		Rect.Right += PadClippingBox;
 		Rect.Top -= PadClippingBox;
@@ -762,8 +761,8 @@ export async function GetLineSegments(Image,RenderContext=null)
 	};
 	
 	
-	// Classical implementation.
-	function houghAccClassical(x, y,Score) 
+	//	increment maps where pixel lies
+	function OnPixel(x, y,Score) 
 	{
 		const Imagex = x;
 		const Imagey = y;
@@ -786,13 +785,8 @@ export async function GetLineSegments(Image,RenderContext=null)
 		}
 	}
 	
-	function OnPixel(x,y,Score)
-	{
-		houghAccClassical(x,y,Score);
-	}
 	
-	
-	//	score
+	//	write scores
 	for ( let y=0;	y<ImageHeight;	y++ )
 	{
 		for ( let x=0;	x<ImageWidth;	x++ )
