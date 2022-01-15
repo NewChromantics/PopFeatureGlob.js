@@ -192,18 +192,20 @@ export async function GetLineSegments(Image,RenderContext=null)
 	
 	//	gr: angles get way more innaccurate the further from the cell center they are
 	const AngleCount = 90;	//	360 does give more accurate lines
-	const NeighbourSearch_AngleDegreeRange = 2;
+	const NeighbourSearch_AngleDegreeRange = 0;
 	const NeighbourSearch_AngleRadius = Math.max( 1, Math.floor(NeighbourSearch_AngleDegreeRange * (AngleCount/360) ) );
-	const NeighbourSearch_RhoRadius = 2;
+	const NeighbourSearch_RhoRadius = 0;
 
 	const SkipDuplicates = true;
 	const ClipToLineMinMax = true;
+	const SnapEndPointsToExistingLine = true;
 	
 	//	artificially makes lines a bit longer. but also decreases density
 	//	helps where min/max of cell becomes fuzzy regarding xy search
 	const PadClippingBox = 1;	
 	const DontDuplicateHigherDensity = false;
-	const MergeLineDistance = 8;	//	smaller lines within this distance are culled
+	const MergeLineDistance = 7;	//	smaller lines within this distance are culled
+	const MergeEndPointMaxDistance = 3;
 	const SkipIfSameNeighbours = false;	//	for debugging, we'll lose lines!
 	const LineDensityUseScore = true;	//	false better on small images...
 	const NeighbourCompareDensity = false;	//	else score
@@ -361,6 +363,62 @@ export async function GetLineSegments(Image,RenderContext=null)
 			}
 		}
 		
+		function GetNearStart(Line,LineIndex)
+		{
+			const Meta = {};
+			Meta.LineIndex = LineIndex;
+			Meta.StartDistance = Distance2(NewLine.Start,Line.Start);
+			Meta.EndDistance = Distance2(NewLine.Start,Line.End);
+			if ( Meta.StartDistance <= Meta.EndDistance )
+				Meta.Nearest = Line.Start;
+			else
+				Meta.Nearest = Line.End;
+			Meta.AnyDistance = Math.min( Meta.StartDistance, Meta.EndDistance );
+			if ( Meta.AnyDistance > MergeEndPointMaxDistance )
+				return null;
+			return Meta;
+		}
+
+		function GetNearEnd(Line,LineIndex)
+		{
+			const Meta = {};
+			Meta.LineIndex = LineIndex;
+			Meta.StartDistance = Distance2(NewLine.End,Line.Start);
+			Meta.EndDistance = Distance2(NewLine.End,Line.End);
+			if ( Meta.StartDistance <= Meta.EndDistance )
+				Meta.Nearest = Line.Start;
+			else
+				Meta.Nearest = Line.End;
+			Meta.AnyDistance = Math.min( Meta.StartDistance, Meta.EndDistance );
+			if ( Meta.AnyDistance > MergeEndPointMaxDistance )
+				return null;
+			return Meta;
+		}
+		
+		function CompareAnyDistance(a,b)
+		{
+			if ( a.AnyDistance < b.AnyDistance )	return -1; 
+			if ( a.AnyDistance > b.AnyDistance )	return 1; 
+			return 0;
+		}
+		
+		if ( SnapEndPointsToExistingLine )
+		{
+			const NearestStart = LineSegments.map(GetNearStart).filter( m=>m!=null ).sort(CompareAnyDistance)[0];
+			if ( NearestStart && NearestStart.Nearest )
+			{
+				NewLine.Start = NearestStart.Nearest.slice();
+				StartsSnapped++;
+			}
+			
+			const NearestEnd = LineSegments.map(GetNearEnd).filter( m=>m!=null ).sort(CompareAnyDistance)[0];
+			if ( NearestEnd && NearestEnd.Nearest )
+			{
+				NewLine.End = NearestEnd.Nearest.slice();
+				EndsSnapped++;
+			}
+		}
+		
 		LineSegments.push(NewLine);
 	}
 	
@@ -474,7 +532,11 @@ export async function GetLineSegments(Image,RenderContext=null)
 			{
 				if ( NeighbourCompareDensity )
 				{
-					let NeighbourDensity = NeighbourHit.Density;
+					const NeighbourLine = GetLine( NeighbourHit, CellRect, NeighbourAngleIndex, NeighbourRho );
+					if ( !NeighbourLine )
+						return -1;
+					
+					let NeighbourDensity = NeighbourLine.Density;
 					if ( NeighbourDensity > Hit.Density )
 						return -1;
 					if ( NeighbourDensity < Hit.Density )
