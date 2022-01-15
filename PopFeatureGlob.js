@@ -191,7 +191,7 @@ export async function GetLineSegments(Image,RenderContext=null)
 	//	https://github.com/gmarty/hough-transform-js/blob/master/hough-transform.js
 	
 	//	gr: angles get way more innaccurate the further from the cell center they are
-	const AngleCount = 180;	//	360 does give more accurate lines
+	const AngleCount = 90;	//	360 does give more accurate lines
 	const NeighbourSearch_AngleDegreeRange = 10;
 	const NeighbourSearch_AngleRadius = Math.max( 1, Math.floor(NeighbourSearch_AngleDegreeRange * (AngleCount/360) ) );
 	const NeighbourSearch_RhoRadius = 5;
@@ -212,14 +212,14 @@ export async function GetLineSegments(Image,RenderContext=null)
 	const SkipIfSameNeighbours = false;	//	for debugging, we'll lose lines!
 	const LineDensityUseScore = true;	//	false better on small images...
 	const NeighbourCompareDensity = false;	//	else score
-	const LineDensityMin = 0.74;
+	const LineDensityMin = 0.70;
 	const MinPixelScore = 4;	//	this is now scored so scales
-	const MinPixelHits = 6;
+	const MinPixelHits = 4;
 	const MinPercentile = 0.011;	//	might cut off too many un-related weak lines
 	const SnapToImagePreDuplicate = true;
 	const SnapToImagePixelRadius = 5;
-	const CellsWide = 18;//Math.floor( (1/640) * ImageWidth );
-	const CellsHigh = 10;//Math.floor( (1/480) * ImageHeight );
+	const CellsWide = 26;//Math.floor( (1/640) * ImageWidth );
+	const CellsHigh = 18;//Math.floor( (1/480) * ImageHeight );
 	const CellSize = [CellsWide,CellsHigh];
 	const CellCount = CellSize[0] * CellSize[1];
 	const CellAngleRhoHits = new Array(CellCount);
