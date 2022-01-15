@@ -197,48 +197,45 @@ export async function GetLineSegments(Image,RenderContext=null)
 	const NeighbourSearch_RhoRadius = 2;
 
 	const SkipDuplicates = true;
-	const SnapNewLines = false;
-
 	const ClipToLineMinMax = true;
 	
 	//	artificially makes lines a bit longer. but also decreases density
 	//	helps where min/max of cell becomes fuzzy regarding xy search
 	const PadClippingBox = 1;	
-	
+	const DontDuplicateHigherDensity = false;
 	const MergeLineDistance = 8;	//	smaller lines within this distance are culled
 	const SkipIfSameNeighbours = false;	//	for debugging, we'll lose lines!
 	const LineDensityUseScore = true;	//	false better on small images...
 	const NeighbourCompareDensity = false;	//	else score
-	const LineDensityMin = 0.70;
+	const LineDensityMin = 0.90;
 	const MinPixelScore = 4;	//	this is now scored so scales
 	const MinPixelHits = 4;
 	const SnapToImagePreDuplicate = true;
 	const SnapToImagePixelRadius = 5;
-	const CellsWide = 26;//Math.floor( (1/640) * ImageWidth );
-	const CellsHigh = 18;//Math.floor( (1/480) * ImageHeight );
-	const CellSize = [CellsWide,CellsHigh];
+	//const CellsWide = 26;//Math.floor( (1/640) * ImageWidth );
+	//const CellsHigh = 18;//Math.floor( (1/480) * ImageHeight );
 	
 		
-	function GetCellXy(x,y)
+	function GetCellXy(x,y,CellDim)
 	{
-		const cx = Math.floor( x / ImageWidth * CellSize[0]);
-		const cy = Math.floor( y / ImageHeight * CellSize[1]);
+		const cx = Math.floor( x / ImageWidth * CellDim[0]);
+		const cy = Math.floor( y / ImageHeight * CellDim[1]);
 		return [cx,cy];
 	}
-	function GetCellIndex(x,y)
+	function GetCellIndex(x,y,CellDim)
 	{
-		const cxy = GetCellXy(x,y);
-		const Index = cxy[0] + (cxy[1] * CellSize[0]);
+		const cxy = GetCellXy(x,y,CellDim);
+		const Index = cxy[0] + (cxy[1] * CellDim[0]);
 		return Index;
 	}
-	function GetCellRect(Index)
+	function GetCellRect(Index,CellDim)
 	{
-		const cx = Index % CellSize[0];
-		const cy = Math.floor( Index / CellSize[0] );
-		let Left = cx / CellSize[0];
-		let Right = (cx+1) / CellSize[0];
-		let Top = cy / CellSize[1];
-		let Bottom = (cy+1) / CellSize[1];
+		const cx = Index % CellDim[0];
+		const cy = Math.floor( Index / CellDim[0] );
+		let Left = cx / CellDim[0];
+		let Right = (cx+1) / CellDim[0];
+		let Top = cy / CellDim[1];
+		let Bottom = (cy+1) / CellDim[1];
 		const Rect = {};
 		Rect.Left = Math.floor(Left * ImageWidth);
 		Rect.Right = Math.floor(Right * ImageWidth);
@@ -304,6 +301,7 @@ export async function GetLineSegments(Image,RenderContext=null)
 		return BestPos;
 	}
 	
+	let DuplicateButDenserIgnored = 0;
 	let DuplicatesSkipped = 0;
 	let NeighboursSkipped = 0;
 	let SameNeighboursSkipped = 0;
@@ -340,14 +338,27 @@ export async function GetLineSegments(Image,RenderContext=null)
 		{
 			const LineDistance = GetLineDistanceToLine( [NewLine.Start,NewLine.End], [Line.Start,Line.End] );
 			if ( LineDistance <= MergeLineDistance )
-				return true;
+			{
+				if ( DontDuplicateHigherDensity && NewLine.Density > Line.Density )
+				{
+					DuplicateButDenserIgnored++;
+				}
+				else
+				{
+					return true;
+				}
+			}
+				
 			return false;
 		}
 		
-		if ( LineSegments.some( TooCloseToLine ) )
+		if ( SkipDuplicates )
 		{
-			DuplicatesSkipped++;
-			return true;
+			if ( LineSegments.some( TooCloseToLine ) )
+			{
+				DuplicatesSkipped++;
+				return true;
+			}
 		}
 		
 		LineSegments.push(NewLine);
@@ -421,7 +432,7 @@ export async function GetLineSegments(Image,RenderContext=null)
 		return Line;
 	}
 	
-	function ExtractHoughLines(CellAngleRhoHits) 
+	function ExtractHoughLines(CellAngleRhoHits,CellDim) 
 	{
 		const CellCount = CellAngleRhoHits.length;
 		for ( let CellIndex=0;	CellIndex<CellCount;	CellIndex++ )
@@ -430,7 +441,7 @@ export async function GetLineSegments(Image,RenderContext=null)
 			if ( !AngleRhoHits )
 				continue;
 				
-			const CellRect = GetCellRect(CellIndex);
+			const CellRect = GetCellRect(CellIndex,CellDim);
 			FindLinesInCell( CellRect, AngleRhoHits );
 		}
 		
@@ -577,6 +588,7 @@ export async function GetLineSegments(Image,RenderContext=null)
 		console.log(`skipped neighbour lines x${NeighboursSkipped}`);
 		console.log(`skipped same neighbour lines x${SameNeighboursSkipped}`);
 		console.log(`skipped duplicate lines x${DuplicatesSkipped}`);
+		console.log(`DuplicateButDenserIgnored x${DuplicateButDenserIgnored}`);
 		console.log(`snapped starts x${StartsSnapped}`);
 		console.log(`snapped ends x${EndsSnapped}`);
 		console.log(`Lines found ${LineSegments.length}`);
@@ -631,13 +643,13 @@ export async function GetLineSegments(Image,RenderContext=null)
 	
 	
 	//	increment maps where pixel lies
-	function OnPixel(x,y,Score,CellAngleRhoHits) 
+	function OnPixel(x,y,Score,CellAngleRhoHits,CellDim) 
 	{
 		const Imagex = x;
 		const Imagey = y;
-		const CellIndex = GetCellIndex(x,y);
+		const CellIndex = GetCellIndex(x,y,CellDim);
 		CellAngleRhoHits[CellIndex] = CellAngleRhoHits[CellIndex] || new Array(AngleCount);
-		const CellRect = GetCellRect(CellIndex);
+		const CellRect = GetCellRect(CellIndex,CellDim);
 		
 		x -= CellRect.MiddleX;
 		y -= CellRect.MiddleY;
@@ -657,7 +669,7 @@ export async function GetLineSegments(Image,RenderContext=null)
 	
 	
 	//	write scores
-	function IteratePixels(CellAngleRhoHits)
+	function IteratePixels(CellAngleRhoHits,CellDim)
 	{
 		for ( let y=0;	y<ImageHeight;	y++ )
 		{
@@ -668,20 +680,34 @@ export async function GetLineSegments(Image,RenderContext=null)
 				{
 					//if ( Score <= 0 )
 					//	continue;
-					OnPixel(x,y, Score,CellAngleRhoHits);
+					OnPixel(x,y, Score,CellAngleRhoHits,CellDim);
 				}
 			}
 		}
 	}
 
+
+	//	pyramids!
+	const CellPyramids = 
+	[
+		//1,
+		3,
+		4,
+		8,
+		16,
+		32,
+	];
+
+	for ( let CellSize of CellPyramids )
 	{
-		const CellCount = CellSize[0] * CellSize[1];
-		const CellAngleRhoHits = new Array(CellCount);
+		const CellDim = [CellSize,CellSize];
+		//const CellCount = CellSize[0] * CellSize[1];
+		const CellAngleRhoHits = new Array( CellDim[0] * CellDim[1] );
 
 		//	extract lines
-		IteratePixels(CellAngleRhoHits);
+		IteratePixels( CellAngleRhoHits, CellDim );
 		console.log(`LargestHitCount=${LargestHitCount} HitsAllocated=${HitsAllocated}`);
-		ExtractHoughLines(CellAngleRhoHits);
+		ExtractHoughLines( CellAngleRhoHits, CellDim );
 	}
 	
 	function NormaliseLineSegment(Line)
