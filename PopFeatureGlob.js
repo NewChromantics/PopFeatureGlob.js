@@ -522,10 +522,10 @@ export async function GetLineSegments(Image,RenderContext=null)
 			
 		let LineWidth = 1000;
 			
-		let x1=a*Rho+LineWidth*(-b);
-		let y1=(b*Rho+LineWidth*(a));
-		let x2=a*Rho-LineWidth*(-b);
-		let y2=(b*Rho-LineWidth*(a));
+		let x1 = a*Rho + LineWidth * (-b);
+		let y1 = b*Rho + LineWidth * (a);
+		let x2 = a*Rho - LineWidth * (-b);
+		let y2 = b*Rho - LineWidth * (a);
 		x1 += CellRect.MiddleX;
 		x2 += CellRect.MiddleX;
 		y1 += CellRect.MiddleY;
@@ -594,10 +594,10 @@ export async function GetLineSegments(Image,RenderContext=null)
 					
 				for ( let rhokey in RhoHits ) 
 				{
-					let rho = Number(rhokey);
-					let Hit = RhoHits[rho];
+					let Hit = RhoHits[rhokey];
 					if ( !Hit )
 						continue;
+					let rho = Number(rhokey);
 					
 					if ( Hit.Score < MinAccumulationScore )
 						continue; 
@@ -718,10 +718,14 @@ export async function GetLineSegments(Image,RenderContext=null)
 		console.log(`Lines found ${LineSegments.length}`);
 	}
 
+	let LargestHitCount = 0;
+	let HitsAllocated = 0;
+	
 	class Hit_t
 	{
 		constructor()
 		{
+			HitsAllocated++;
 			this.Score = 0;
 			this.HitCount = 0;
 			//	essentially store a bounding rect for a line
@@ -734,6 +738,7 @@ export async function GetLineSegments(Image,RenderContext=null)
 		{
 			this.Score += Score;
 			this.HitCount += 1;
+			LargestHitCount = Math.max( LargestHitCount, this.HitCount );
 			if ( !this.Min )
 			{
 				this.Min = [x,y];
@@ -773,6 +778,7 @@ export async function GetLineSegments(Image,RenderContext=null)
 		x -= CellRect.MiddleX;
 		y -= CellRect.MiddleY;
 		
+				
 		for ( let AngleIndex=0;	AngleIndex<AngleCount;	AngleIndex++ ) 
 		{
 			let Theta = (AngleIndex/AngleCount) * (Math.PI);
@@ -787,19 +793,26 @@ export async function GetLineSegments(Image,RenderContext=null)
 	
 	
 	//	write scores
-	for ( let y=0;	y<ImageHeight;	y++ )
+	function IteratePixels()
 	{
-		for ( let x=0;	x<ImageWidth;	x++ )
+		for ( let y=0;	y<ImageHeight;	y++ )
 		{
-			const Score = GetPixelScore(x,y);
-			if ( Score <= 0 )
-				continue;
-			OnPixel(x,y, Score);
+			for ( let x=0;	x<ImageWidth;	x++ )
+			{
+				const Score = GetPixelScore(x,y);
+				if ( Score > 0 )
+				{
+					//if ( Score <= 0 )
+					//	continue;
+					OnPixel(x,y, Score);
+				}
+			}
 		}
 	}
-	
 
 	//	extract lines
+	IteratePixels();
+	console.log(`LargestHitCount=${LargestHitCount} HitsAllocated=${HitsAllocated}`);
 	findMaxInHough();
 	
 	function NormaliseLineSegment(Line)
