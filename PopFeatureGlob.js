@@ -205,7 +205,7 @@ export async function GetLineSegments(Image,RenderContext=null)
 	const PadClippingBox = 1;	
 	const DontDuplicateHigherDensity = false;
 	const MergeLineDistance = 7;	//	smaller lines within this distance are culled
-	const MergeEndPointMaxDistance = 3;
+	const MergeEndPointMaxDistance = 4;
 	const SkipIfSameNeighbours = false;	//	for debugging, we'll lose lines!
 	const LineDensityUseScore = true;	//	false better on small images...
 	const NeighbourCompareDensity = false;	//	else score
@@ -214,6 +214,7 @@ export async function GetLineSegments(Image,RenderContext=null)
 	const MinPixelHits = 4;
 	const SnapToImagePreDuplicate = true;
 	const SnapToImagePixelRadius = 5;
+	const MinLengthOfCellPercent = 0.10;	//	dont detect tiny lines in large cells
 	//const CellsWide = 26;//Math.floor( (1/640) * ImageWidth );
 	//const CellsHigh = 18;//Math.floor( (1/480) * ImageHeight );
 	
@@ -303,6 +304,8 @@ export async function GetLineSegments(Image,RenderContext=null)
 		return BestPos;
 	}
 	
+	let LineDensitySkipped = 0;
+	let LineCellLengthSkipped = 0;
 	let DuplicateButDenserIgnored = 0;
 	let DuplicatesSkipped = 0;
 	let NeighboursSkipped = 0;
@@ -468,7 +471,7 @@ export async function GetLineSegments(Image,RenderContext=null)
 		];
 		let EdgeIntersections = ImageEdges.map( Edge => GetLineLineIntersection( Edge[0], Edge[1], Start, End ) );
 		EdgeIntersections = EdgeIntersections.filter( Intersection => Intersection!=false );
-			
+
 		if ( EdgeIntersections.length != 2 )
 			return null;
 		
@@ -484,6 +487,9 @@ export async function GetLineSegments(Image,RenderContext=null)
 		//	note: hit count is a score, so
 		Line.LengthPx = Distance2( Line.Start, Line.End );
 		Line.Density = (LineDensityUseScore ? Hit.Score : Hit.HitCount) / Line.LengthPx;
+		
+		const CellSize = Distance2( [CellRect.Left,CellRect.Top], [CellRect.Right,CellRect.Bottom] );
+		Line.LengthPercentOfCell = Line.LengthPx / CellSize;
 		
 		//	cache
 		Hit.Line = Line;
@@ -525,8 +531,17 @@ export async function GetLineSegments(Image,RenderContext=null)
 				return;
 				
 			if ( HitLine.Density < LineDensityMin )
+			{
+				LineDensitySkipped++;
 				return;
-			
+			}
+				
+			if ( HitLine.LengthPercentOfCell < MinLengthOfCellPercent )
+			{
+				LineCellLengthSkipped++;
+				return;
+			}
+		
 			//	return -1 if neighbour better
 			function CompareNeighbour(NeighbourHit,NeighbourAngleIndex,NeighbourRho)
 			{
@@ -647,6 +662,8 @@ export async function GetLineSegments(Image,RenderContext=null)
 		NewLines.forEach( AddLine );
 		
 		
+		console.log(`LineDensitySkipped x${LineDensitySkipped}`);
+		console.log(`LineCellLengthSkipped x${LineCellLengthSkipped}`);
 		console.log(`skipped neighbour lines x${NeighboursSkipped}`);
 		console.log(`skipped same neighbour lines x${SameNeighboursSkipped}`);
 		console.log(`skipped duplicate lines x${DuplicatesSkipped}`);
@@ -753,9 +770,9 @@ export async function GetLineSegments(Image,RenderContext=null)
 	const CellPyramids = 
 	[
 		//1,
-		3,
+		//2,
 		4,
-		8,
+		//8,
 		16,
 		32,
 	];
