@@ -162,6 +162,16 @@ export async function GetLineSegmentImage(Image,RenderContext=null)
 	return FilterImage( Image, RenderContext, FragShaders );
 }
 
+function GetDifferenceWrapped(a,b,Max)
+{
+	let Diff = Math.abs( a - b );
+	if ( Diff > Max/2 )
+		Diff -= Max;
+	if ( Diff < -Max/2 )
+		Diff += Max;
+	return Diff;
+}
+
 export async function GetLineSegments(Image,RenderContext=null)
 {
 	Image = await GetLineSegmentImage(Image,RenderContext);
@@ -200,16 +210,20 @@ export async function GetLineSegments(Image,RenderContext=null)
 	const ClipToLineMinMax = true;
 	const SnapEndPointsToExistingLine = true;
 	
+	const WeldLines = false;
+	const WeldLineMaxAngleDifference = 1;
+	const WeldLineEndPointMaxDistance = 1;
+	
 	//	artificially makes lines a bit longer. but also decreases density
 	//	helps where min/max of cell becomes fuzzy regarding xy search
 	const PadClippingBox = 1;	
 	const DontDuplicateHigherDensity = false;
 	const MergeLineDistance = 7;	//	smaller lines within this distance are culled
-	const MergeEndPointMaxDistance = 4;
+	const MergeEndPointMaxDistance = 5;
 	const SkipIfSameNeighbours = false;	//	for debugging, we'll lose lines!
 	const LineDensityUseScore = true;	//	false better on small images...
 	const NeighbourCompareDensity = false;	//	else score
-	const LineDensityMin = 0.90;
+	const LineDensityMin = 0.88;
 	const MinPixelScore = 4;	//	this is now scored so scales
 	const MinPixelHits = 4;
 	const SnapToImagePreDuplicate = true;
@@ -217,6 +231,7 @@ export async function GetLineSegments(Image,RenderContext=null)
 	const MinLengthOfCellPercent = 0.10;	//	dont detect tiny lines in large cells
 	//const CellsWide = 26;//Math.floor( (1/640) * ImageWidth );
 	//const CellsHigh = 18;//Math.floor( (1/480) * ImageHeight );
+	
 	
 		
 	function GetCellXy(x,y,CellDim)
@@ -304,6 +319,7 @@ export async function GetLineSegments(Image,RenderContext=null)
 		return BestPos;
 	}
 	
+	let LinesWelded = 0;
 	let LineDensitySkipped = 0;
 	let LineCellLengthSkipped = 0;
 	let DuplicateButDenserIgnored = 0;
@@ -366,28 +382,14 @@ export async function GetLineSegments(Image,RenderContext=null)
 			}
 		}
 		
-		function GetNearStart(Line,LineIndex)
+		
+		function GetNearMeta(Line,LineIndex,NewLinePoint)
 		{
 			const Meta = {};
 			Meta.LineIndex = LineIndex;
-			Meta.StartDistance = Distance2(NewLine.Start,Line.Start);
-			Meta.EndDistance = Distance2(NewLine.Start,Line.End);
-			if ( Meta.StartDistance <= Meta.EndDistance )
-				Meta.Nearest = Line.Start;
-			else
-				Meta.Nearest = Line.End;
-			Meta.AnyDistance = Math.min( Meta.StartDistance, Meta.EndDistance );
-			if ( Meta.AnyDistance > MergeEndPointMaxDistance )
-				return null;
-			return Meta;
-		}
-
-		function GetNearEnd(Line,LineIndex)
-		{
-			const Meta = {};
-			Meta.LineIndex = LineIndex;
-			Meta.StartDistance = Distance2(NewLine.End,Line.Start);
-			Meta.EndDistance = Distance2(NewLine.End,Line.End);
+			Meta.AngleDifference = GetDifferenceWrapped( Line.AngleIndex, NewLine.AngleIndex, AngleCount );
+			Meta.StartDistance = Distance2(NewLinePoint,Line.Start);
+			Meta.EndDistance = Distance2(NewLinePoint,Line.End);
 			if ( Meta.StartDistance <= Meta.EndDistance )
 				Meta.Nearest = Line.Start;
 			else
@@ -398,12 +400,24 @@ export async function GetLineSegments(Image,RenderContext=null)
 			return Meta;
 		}
 		
+		
+		function GetNearStart(Line,LineIndex)
+		{
+			return GetNearMeta( Line, LineIndex, NewLine.Start );
+		}
+
+		function GetNearEnd(Line,LineIndex)
+		{
+			return GetNearMeta( Line, LineIndex, NewLine.End );
+		}
+		
 		function CompareAnyDistance(a,b)
 		{
 			if ( a.AnyDistance < b.AnyDistance )	return -1; 
 			if ( a.AnyDistance > b.AnyDistance )	return 1; 
 			return 0;
 		}
+		
 		
 		if ( SnapEndPointsToExistingLine )
 		{
@@ -655,12 +669,76 @@ export async function GetLineSegments(Image,RenderContext=null)
 			return 0;
 		}
 		
+		function WeldLineSegments(LineSegments)
+		{
+			if ( !WeldLines )
+				return;
+			function Weldable(a,b)
+			{
+				return Distance2(a,b) <= WeldLineEndPointMaxDistance;
+			}
+			
+			function TryWeldLine(ParentLine,ChildLine)
+			{
+				//	todo: in case a sub-line has slipped through, or is now within this line, drop it
+				
+				//	need angles to match
+				//	todo: need to make sure we're using updated (real) angles?
+				let AngleDifference = GetDifferenceWrapped(ParentLine.AngleIndex,ChildLine.AngleIndex);
+				if ( AngleDifference > WeldLineMaxAngleDifference )
+					return false;
+					
+				//	todo: do best rather than first?
+				//	technically this could make the line smaller by blinding welding the other one
+				if ( Weldable(ParentLine.End,ChildLine.Start) )
+				{
+					ParentLine.End = ChildLine.End.slice();
+				}
+				else if ( Weldable(ParentLine.Start,ChildLine.End) )
+				{
+					ParentLine.Start = ChildLine.Start.slice();
+				}
+				else if ( Weldable(ParentLine.End,ChildLine.End) )
+				{
+					ParentLine.End = ChildLine.Start.slice();
+				}
+				else if ( Weldable(ParentLine.Start,ChildLine.End) )
+				{
+					ParentLine.Start = ChildLine.Start.slice();
+				}
+				else
+				{
+					return false;
+				}
+				return true;
+			}
+			
+			for ( let ParentIndex=0;	ParentIndex<LineSegments.length;	ParentIndex++ )
+			{
+				let ParentLine = LineSegments[ParentIndex];
+				
+				//	go through other lines and absorb if appropriate
+				for ( let ChildIndex=LineSegments.length-1;	ChildIndex>ParentIndex;	ChildIndex-- )
+				{
+					let ChildLine = LineSegments[ChildIndex];
+					if ( TryWeldLine(ParentLine,ChildLine) )
+					{
+						LineSegments.splice( ChildIndex, 1 );
+						ParentLine.Dirty = true;	//	note that angle, length etc is probably wrong now
+						LinesWelded++;
+					}
+				}
+			}
+		}
+		
+		
+		
 		//	sort lines bigger to smaller so overlapped 
 		//	lines are more likely to get culled
 		NewLines.forEach( SnapLineToImage );
 		NewLines = NewLines.sort( CompareLineLengths );
 		NewLines.forEach( AddLine );
-		
+		WeldLineSegments(LineSegments);
 		
 		console.log(`LineDensitySkipped x${LineDensitySkipped}`);
 		console.log(`LineCellLengthSkipped x${LineCellLengthSkipped}`);
@@ -670,6 +748,7 @@ export async function GetLineSegments(Image,RenderContext=null)
 		console.log(`DuplicateButDenserIgnored x${DuplicateButDenserIgnored}`);
 		console.log(`snapped starts x${StartsSnapped}`);
 		console.log(`snapped ends x${EndsSnapped}`);
+		console.log(`Lines Welded x${LinesWelded}`);
 		console.log(`Lines found ${LineSegments.length}`);
 	}
 
@@ -769,12 +848,12 @@ export async function GetLineSegments(Image,RenderContext=null)
 	//	pyramids!
 	const CellPyramids = 
 	[
-		//1,
-		//2,
+		1,
+		2,
 		4,
-		//8,
+		8,
 		16,
-		32,
+		//32,
 	];
 
 	for ( let CellSize of CellPyramids )
