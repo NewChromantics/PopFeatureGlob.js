@@ -7,14 +7,14 @@ uniform vec2 InputWidthHeight;
 //uniform sampler2D BackgroundImage;
 
 //	width/height of sample area
-#define SAMPLE_RADIUS	7
+#define SAMPLE_RADIUS	4
 #define SAMPLE_COUNT_WIDTH	SAMPLE_RADIUS
 #define SAMPLE_COUNT_HEIGHT	SAMPLE_COUNT_WIDTH
 
 #define SAMPLE_RADIUSf		float(SAMPLE_RADIUS)
 #define SAMPLE_COUNT_WIDTHf	float(SAMPLE_COUNT_WIDTH)
 
-#define DILATE_RADIUS	2
+#define WHITE_LINES_ONLY	true
 
 float GetLuma(vec4 Rgba)
 {
@@ -72,14 +72,42 @@ void IncreaseArrayIndexCount(inout int Array[HISTOGRAM_BIN_COUNT],int Index)
 	*/
 }
 
+//https://stackoverflow.com/a/17897228/355753
+// All components are in the range [0...1], including hue.
+vec3 rgb2hsv(vec3 c)
+{
+	vec4 K = vec4(0.0, -1.0 / 3.0, 2.0 / 3.0, -1.0);
+	vec4 p = mix(vec4(c.bg, K.wz), vec4(c.gb, K.xy), step(c.b, c.g));
+	vec4 q = mix(vec4(p.xyw, c.r), vec4(c.r, p.yzx), step(p.x, c.r));
+
+	float d = q.x - min(q.w, q.y);
+	float e = 1.0e-10;
+	return vec3(abs(q.z + (q.w - q.y) / (6.0 * d + e)), d / (q.x + e), q.x);
+}
+
+vec3 GetGreenHsl()
+{
+	vec3 Green = vec3(93,119,53)/255.0;
+	vec3 GreenHsl = rgb2hsv(Green);
+	return GreenHsl;
+}
+
 bool ContainsGreen(vec3 Rgb)
 {
+	vec3 GreenHsl = GetGreenHsl();
+	vec3 Hsl = rgb2hsv(Rgb);
+	vec3 Diff = abs( Hsl - GreenHsl );
+	if ( Diff.x > 0.07 )	return false;
+	if ( Diff.y > 0.25 )	return false;
+	if ( Diff.z > 0.16 )	return false;
+	return true;
+/*		
 	//	todo: get hue angle?
 	//	also expects quite bright
 	bool Green = Rgb.y > 0.61;
-	bool White = max(Rgb.x,Rgb.z) > 0.6;
+	bool White = max(Rgb.x,Rgb.z) > 0.7;
 	//return true; 
-	return Green && !White;
+	return Green && !White;*/
 }
 
 
@@ -113,18 +141,35 @@ bool IsBright(int Offsetx,int Offsety)
 		}
 	}
 
+	//	hack; near the pitch
 	if ( !GreenNear )
 	{
 		return false;
 	}
-
-	//	get the sample and normalise it to the min/max range
+	
+		//	get the sample and normalise it to the min/max range
 	vec4 Rgba = texture2D( InputTexture, FragUv );
 	float Luma = GetLuma( Rgba );
 	
 	Luma = Range( MinLuma, MaxLuma, Luma );
-	gl_FragColor = vec4( Luma, Luma, Luma, 1.0 );
+	//gl_FragColor = vec4( Luma, Luma, Luma, 1.0 );
 	
+	//	hack:	sample must be brighter than our green
+	{
+		vec3 GreenHsl = GetGreenHsl();
+		vec3 SampleHsl = rgb2hsv(Rgba.xyz);
+		//if ( SampleHsl.z < GreenHsl.z )
+		//	return false;
+		
+		if ( WHITE_LINES_ONLY )
+		{
+			if ( ContainsGreen(Rgba.xyz) )
+				return false;
+		}
+	}
+
+
+
 	/*
 	//	show how many bins we hit in historgram
 	int BinHitCount = 0;
@@ -141,7 +186,9 @@ bool IsBright(int Offsetx,int Offsety)
 	//Luma = Luma < 0.450 ? 0.0 : 1.0;
 	//gl_FragColor.xyz = vec3(Luma,Luma,Luma);
 	
-	#define LOW_CONTRAST 0.12
+	//	when we have small amount of samples, we can really lower this contrast
+	float LOW_CONTRAST = WHITE_LINES_ONLY ? 0.01 : 0.07;
+
 	//	make low-range areas black
 	if ( MaxLuma-MinLuma < LOW_CONTRAST )
 		return false;
@@ -159,18 +206,29 @@ bool IsBright(int Offsetx,int Offsety)
 void main()
 {
 	bool SelfBright = IsBright(0,0);
-/*	
-	//	dilate
-	for ( int y=-DILATE_RADIUS;	y<=DILATE_RADIUS;	y++ )
+	vec3 SelfColour = texture2D( InputTexture, FragUv ).xyz;
+
+	gl_FragColor = SelfBright ? vec4(1,1,1,1) : vec4(0,0,0,1);
+
+#define TEST_GREEN	false
+
+	if ( TEST_GREEN )
 	{
-		for ( int x=-DILATE_RADIUS;	x<=DILATE_RADIUS;	x++ )
+		//	test green filter
+		if ( ContainsGreen(SelfColour) )
 		{
-			bool NeighbourBright = IsBright(x,y);
-			SelfBright = SelfBright || NeighbourBright;
+			gl_FragColor.xyz = SelfColour;
+		}
+		else
+		{
+			gl_FragColor.xyz = vec3(0,0,0);
 		}
 	}
-	*/
-	gl_FragColor = SelfBright ? vec4(1,1,1,1) : vec4(0,0,0,1);
+
+	//if ( SelfBright )
+	{
+		//gl_FragColor.xyz = texture2D( InputTexture, FragUv ).xyz;
+	}
 }
 
 `;
